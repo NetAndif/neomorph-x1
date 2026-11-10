@@ -4,13 +4,17 @@ project(NeomorphX1 VERSION 1.0.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# JUCE per FetchContent automatisch aus GitHub einbinden
+# JUCE per FetchContent aus GitHub einbinden (stabiles Tag 8.0.4)
 include(FetchContent)
 FetchContent_Declare(
     juce
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG        8.0.0 # Oder neuere Version
+    GIT_TAG        8.0.4
 )
+
+# Hindert JUCE daran, juceaide für VST3 Manifests zu bauen (vermeidet CI-Compiler-Fehler)
+set(JUCE_BUILD_HELPER_TOOLS OFF CACHE BOOL "" FORCE)
+
 FetchContent_MakeAvailable(juce)
 
 # Plugin-Target definieren
@@ -20,7 +24,7 @@ juce_add_plugin(NeomorphX1
     NEEDS_MIDI_INPUT TRUE
     IS_MIDI_EFFECT FALSE
     SUPPORTS_MIDI_SINGLE_TO_MULTI_CHANNEL_ROUTING FALSE
-    COPY_PLUGIN_AFTER_BUILD TRUE
+    COPY_PLUGIN_AFTER_BUILD FALSE
     PLUGIN_MANUFACTURER_CODE Neom
     PLUGIN_CODE Nmx1
     FORMATS VST3 AU Standalone
