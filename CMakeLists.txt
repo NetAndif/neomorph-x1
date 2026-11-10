@@ -43,6 +43,12 @@ target_sources(NeomorphX1
         Source/PluginEditor.h
 )
 
+# Unter Linux FreeType-Header explizit einbinden
+if(UNIX AND NOT APPLE)
+    find_package(Freetype REQUIRED)
+    target_include_directories(NeomorphX1 PRIVATE ${FREETYPE_INCLUDE_DIRS})
+endif()
+
 # Linken gegen JUCE Module
 target_link_libraries(NeomorphX1
     PRIVATE
