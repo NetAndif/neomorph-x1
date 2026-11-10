@@ -17,6 +17,27 @@ set(JUCE_BUILD_HELPER_TOOLS OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(juce)
 
+# Unter Linux PkgConfig nutzen, um FreeType Include-Pfade systemweit aufzulösen
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(FREETYPE REQUIRED freetype2)
+    include_directories(${FREETYPE_INCLUDE_DIRS})
+endif()
+
+# Grafik-Assets in Binary-Data kompilieren (falls Ordner Assets/ existiert)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Assets")
+    juce_add_binary_data(NeomorphAssets
+        SOURCES
+            Assets/background_main.png
+            Assets/tab_oscillators.png
+            Assets/tab_filter.png
+            Assets/tab_envelopes.png
+            Assets/tab_free_eg.png
+            Assets/tab_step_seq.png
+            Assets/tab_mod_matrix.png
+    )
+endif()
+
 # Plugin-Target definieren
 juce_add_plugin(NeomorphX1
     COMPANY_NAME "YourStudio"
@@ -43,13 +64,11 @@ target_sources(NeomorphX1
         Source/PluginEditor.h
 )
 
-# Unter Linux FreeType-Header explizit einbinden
-if(UNIX AND NOT APPLE)
-    find_package(Freetype REQUIRED)
-    target_include_directories(NeomorphX1 PRIVATE ${FREETYPE_INCLUDE_DIRS})
+# Linken gegen BinaryData (falls vorhanden) und JUCE Module
+if(TARGET NeomorphAssets)
+    target_link_libraries(NeomorphX1 PRIVATE NeomorphAssets)
 endif()
 
-# Linken gegen JUCE Module
 target_link_libraries(NeomorphX1
     PRIVATE
         juce::juce_audio_utils

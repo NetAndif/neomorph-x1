@@ -24,17 +24,45 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
+    // --- Master & Performance ---
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { "cutoff", 1 }, "Cutoff", 
-        juce::NormalisableRange<float> (20.0f, 20000.0f, 1.0f, 0.3f), 1000.0f));
+        juce::ParameterID { "volume", 1 }, "Volume", juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.8f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "portamento", 1 }, "Portamento", juce::NormalisableRange<float> (0.0f, 500.0f, 1.0f), 0.0f));
 
+    // --- Filter Section ---
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { "resonance", 1 }, "Resonance", 
-        juce::NormalisableRange<float> (0.1f, 10.0f, 0.01f), 1.0f));
+        juce::ParameterID { "cutoff", 1 }, "Cutoff", juce::NormalisableRange<float> (20.0f, 20000.0f, 1.0f, 0.3f), 2000.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "resonance", 1 }, "Resonance", juce::NormalisableRange<float> (0.1f, 10.0f, 0.05f), 1.0f));
 
+    // --- Global ADSR ---
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID { "morph", 1 }, "Scene Morph", 
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.0f));
+        juce::ParameterID { "main_attack", 1 }, "Attack", juce::NormalisableRange<float> (0.0f, 5000.0f, 1.0f, 0.4f), 10.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "main_decay", 1 }, "Decay", juce::NormalisableRange<float> (0.0f, 5000.0f, 1.0f, 0.4f), 100.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "main_sustain", 1 }, "Sustain", juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.7f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "main_release", 1 }, "Release", juce::NormalisableRange<float> (0.0f, 5000.0f, 1.0f, 0.4f), 200.0f));
+
+    // --- LFO Section ---
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "lfo_rate", 1 }, "LFO Rate", juce::NormalisableRange<float> (0.1f, 30.0f, 0.1f, 0.5f), 1.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "lfo_depth", 1 }, "LFO Depth", juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.0f));
+
+    // --- Scene Morphing ---
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "scene_1_val", 1 }, "Scene 1", juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "scene_morph", 1 }, "Scene Morph", juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "scene_2_val", 1 }, "Scene 2", juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 1.0f));
+
+    // --- Ribbon Controller ---
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "ribbon_pos", 1 }, "Ribbon", juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.5f));
 
     return { params.begin(), params.end() };
 }
