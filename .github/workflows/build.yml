@@ -21,9 +21,16 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Setup Ninja (Windows/Linux)
-        if: matrix.os != 'macos-latest'
-        uses: cmake-get/ninja-action@v1
+      # Nötige Linux-Systembibliotheken für JUCE installieren
+      - name: Install Linux Dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libjack-jackd2-dev \
+            ladspa-sdk freeglut3-dev g++ libx11-dev libxcomposite-dev \
+            libxcursor-dev libxinerama-dev librandr-dev libxrender-dev \
+            libsysfs-dev libgl1-mesa-dev libglu1-mesa-dev libfreetype6-dev \
+            libcurl4-openssl-dev libwebkit2gtk-4.0-dev
 
       - name: Configure CMake
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -39,3 +46,4 @@ jobs:
             build/NeomorphX1_artefacts/Release/VST3/
             build/NeomorphX1_artefacts/Release/AU/
             build/NeomorphX1_artefacts/Release/Standalone/
+            build/NeomorphX1_artefacts/Release/
