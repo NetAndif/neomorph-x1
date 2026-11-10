@@ -1,0 +1,41 @@
+name: Build Neomorph X1 Plugins
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Ninja (Windows/Linux)
+        if: matrix.os != 'macos-latest'
+        uses: cmake-get/ninja-action@v1
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Plugin
+        run: cmake --build build --config Release
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeomorphX1-${{ matrix.os }}
+          path: |
+            build/NeomorphX1_artefacts/Release/VST3/
+            build/NeomorphX1_artefacts/Release/AU/
+            build/NeomorphX1_artefacts/Release/Standalone/
