@@ -12,7 +12,7 @@ FetchContent_Declare(
     GIT_TAG        8.0.4
 )
 
-# Hindert JUCE daran, juceaide für VST3 Manifests zu bauen (vermeidet CI-Compiler-Fehler)
+# Hindert JUCE daran, juceaide für VST3 Manifests zu bauen
 set(JUCE_BUILD_HELPER_TOOLS OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(juce)
@@ -30,6 +30,9 @@ juce_add_plugin(NeomorphX1
     FORMATS VST3 AU Standalone
     PRODUCT_NAME "Neomorph X1"
 )
+
+# Generiert automatisch die benötigte JuceHeader.h für CMake Targets
+juce_generate_juce_header(NeomorphX1)
 
 # Sourcedateien
 target_sources(NeomorphX1
