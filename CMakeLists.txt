@@ -79,3 +79,10 @@ target_link_libraries(NeomorphX1
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(FREETYPE REQUIRED freetype2)
+    target_include_directories(NeomorphX1 PRIVATE ${FREETYPE_INCLUDE_DIRS})
+    target_link_libraries(NeomorphX1 PRIVATE ${FREETYPE_LIBRARIES})
+endif()
