@@ -4,6 +4,11 @@ project(NeomorphX1 VERSION 1.0.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(UNIX AND NOT APPLE)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -I/usr/include/freetype2")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -I/usr/include/freetype2")
+endif()
+
 # Unter Linux PkgConfig nutzen, um FreeType Include-Pfade systemweit aufzulösen
 if(UNIX AND NOT APPLE)
     find_package(PkgConfig REQUIRED)
