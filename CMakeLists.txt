@@ -79,6 +79,7 @@ target_link_libraries(NeomorphX1
     PRIVATE
         juce::juce_audio_utils
         juce::juce_audio_processors
+		juce::juce_audio_plugin_client
         juce::juce_dsp
     PUBLIC
         juce::juce_recommended_config_flags

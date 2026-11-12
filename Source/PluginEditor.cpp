@@ -20,11 +20,17 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
     for (size_t i = 0; i < tabButtons.size(); ++i)
     {
         auto& btn = tabButtons[i];
-        btn.setAlpha (0.0f); // Hintergrundgrafik zeigt bereits die Beschriftung
+        btn.setAlpha (0.0f);
         btn.setMouseCursor (juce::MouseCursor::PointingHandCursor);
         btn.onClick = [this, i] { setActiveTab (static_cast<ActiveTab> (i)); };
         addAndMakeVisible (btn);
     }
+
+    // Unsichtbarer Klick-Button über dem Settings-/Menü-Icon oben rechts
+    settingsButton.setAlpha (0.0f);
+    settingsButton.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    settingsButton.onClick = [this] { showSettingsMenu(); };
+    addAndMakeVisible (settingsButton);
 
     // Standardgröße (16:9 Verhältnis passend zum Artwork) + Skalierbarkeit
     setResizable (true, true);
@@ -46,6 +52,48 @@ void NeomorphX1AudioProcessorEditor::setActiveTab (ActiveTab newTab)
     }
 }
 
+void NeomorphX1AudioProcessorEditor::showSettingsMenu()
+{
+    juce::PopupMenu menu;
+
+    menu.addSectionHeader ("NEOMORPH X1 // SYSTEM");
+    menu.addItem (1, "Init Patch (Reset)");
+    menu.addSeparator();
+
+    // Submenü für GUI-Skalierung
+    juce::PopupMenu scaleMenu;
+    scaleMenu.addItem (10, "80%  (896 x 504)");
+    scaleMenu.addItem (11, "100% (1120 x 630)");
+    scaleMenu.addItem (12, "125% (1400 x 788)");
+    scaleMenu.addItem (13, "150% (1680 x 945)");
+    menu.addSubMenu ("UI Scale", scaleMenu);
+
+    // In der Standalone-App direkten Zugriff auf Audio/MIDI-Settings anbieten
+    if (auto* holder = juce::StandalonePluginHolder::getInstance())
+    {
+        menu.addSeparator();
+        menu.addItem (20, "Audio / MIDI Settings...");
+    }
+
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&settingsButton),
+                        [this] (int result)
+    {
+        switch (result)
+        {
+            case 10: setSize (896, 504);   break;
+            case 11: setSize (1120, 630);  break;
+            case 12: setSize (1400, 788);  break;
+            case 13: setSize (1680, 945);  break;
+            case 20:
+                if (auto* holder = juce::StandalonePluginHolder::getInstance())
+                    holder->showAudioSettingsDialog();
+                break;
+            default:
+                break;
+        }
+    });
+}
+
 void NeomorphX1AudioProcessorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (juce::Colour::fromRGB (10, 14, 22));
@@ -59,19 +107,9 @@ void NeomorphX1AudioProcessorEditor::paint (juce::Graphics& g)
     // 2. Aktives Tab-Overlay im Mittelfenster zeichnen
     const auto& activeOverlay = tabImages[static_cast<size_t> (currentTab)];
     if (activeOverlay.isValid())
-    {
-        // Falls deine Tab-PNGs Vollbild (16:9) mit Transparenz sind, auf bounds zeichnen.
-        // Falls sie nur das Innenfenster abdecken, passen wir das Rechteck in resized() an.
         g.drawImage (activeOverlay, bounds, juce::RectanglePlacement::stretchToFit);
-    }
 
-    // 3. Aktiven Tab-Reiter mit einem feinen Neon-Cyan-Unterstrich hervorheben
-    const auto activeIdx = static_cast<size_t> (currentTab);
-    auto tabBounds = tabButtons[activeIdx].getBounds().toFloat();
-    g.setColour (juce::Colour::fromRGB (0, 240, 255));
-    g.fillRect (tabBounds.removeFromBottom (2.5f).reduced (4.0f, 0.0f));
-
-    // 4. Dev-Koordinaten-Anzeige (erscheint nach Rechtsklick)
+    // 3. Dev-Koordinaten-Anzeige (erscheint nach Rechtsklick)
     if (lastClickedCoords.isNotEmpty())
     {
         auto infoBox = juce::Rectangle<float> (12.0f, bounds.getHeight() - 32.0f, 340.0f, 22.0f);
@@ -88,8 +126,7 @@ void NeomorphX1AudioProcessorEditor::resized()
     const float w = static_cast<float> (getWidth());
     const float h = static_cast<float> (getHeight());
 
-    // Relative Positionen der 6 Tab-Reiter (aus deiner Grafik abgeleitet)
-    // X-Start bei ~30.5%, Breite insgesamt ~51.5%, Y-Position ~20.8% bis 24.5%
+    // Relative Positionen der 6 Tab-Reiter
     const float tabStartX = 0.305f;
     const float tabY      = 0.208f;
     const float tabH      = 0.036f;
@@ -106,6 +143,15 @@ void NeomorphX1AudioProcessorEditor::resized()
         );
         currentX += tabWidths[i];
     }
+
+    // Settings-Icon oben rechts (Zentrum bei Rel X: 0.9515f, Rel Y: 0.0343f)
+    const float iconSize = 0.032f * w;
+    settingsButton.setBounds (
+        juce::roundToInt (0.9515f * w - iconSize * 0.5f),
+        juce::roundToInt (0.0343f * h - iconSize * 0.5f),
+        juce::roundToInt (iconSize),
+        juce::roundToInt (iconSize)
+    );
 }
 
 void NeomorphX1AudioProcessorEditor::mouseDown (const juce::MouseEvent& event)

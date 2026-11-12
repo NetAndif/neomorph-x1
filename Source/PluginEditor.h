@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
 #include "PluginProcessor.h"
 #include "BinaryData.h"
 
@@ -27,12 +28,14 @@ public:
 
 private:
     void setActiveTab (ActiveTab newTab);
+    void showSettingsMenu();
 
     NeomorphX1AudioProcessor& audioProcessor;
 
     juce::Image backgroundImage;
     std::array<juce::Image, static_cast<size_t> (ActiveTab::NumTabs)> tabImages;
     std::array<juce::TextButton, static_cast<size_t> (ActiveTab::NumTabs)> tabButtons;
+    juce::TextButton settingsButton;
 
     ActiveTab currentTab = ActiveTab::Envelopes;
 
