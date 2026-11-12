@@ -4,6 +4,13 @@ project(NeomorphX1 VERSION 1.0.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Unter Linux PkgConfig nutzen, um FreeType Include-Pfade systemweit aufzulösen
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(FREETYPE REQUIRED freetype2)
+    include_directories(${FREETYPE_INCLUDE_DIRS})
+endif()
+
 # JUCE per FetchContent aus GitHub einbinden (stabiles Tag 8.0.4)
 include(FetchContent)
 FetchContent_Declare(
@@ -16,13 +23,6 @@ FetchContent_Declare(
 set(JUCE_BUILD_HELPER_TOOLS OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(juce)
-
-# Unter Linux PkgConfig nutzen, um FreeType Include-Pfade systemweit aufzulösen
-if(UNIX AND NOT APPLE)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(FREETYPE REQUIRED freetype2)
-    include_directories(${FREETYPE_INCLUDE_DIRS})
-endif()
 
 # Grafik-Assets in Binary-Data kompilieren (falls Ordner Assets/ existiert)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Assets")
