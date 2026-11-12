@@ -41,6 +41,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Assets")
             Assets/tab_step_seq.png
             Assets/tab_mod_matrix.png
     )
+	set_target_properties(NeomorphAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
 
 # Plugin-Target definieren
@@ -90,10 +91,3 @@ target_compile_definitions(NeomorphX1
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
 )
-
-if(UNIX AND NOT APPLE)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(FREETYPE REQUIRED freetype2)
-    target_include_directories(NeomorphX1 PRIVATE ${FREETYPE_INCLUDE_DIRS})
-    target_link_libraries(NeomorphX1 PRIVATE ${FREETYPE_LIBRARIES})
-endif()
