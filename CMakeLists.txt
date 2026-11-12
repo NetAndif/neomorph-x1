@@ -85,6 +85,12 @@ target_link_libraries(NeomorphX1
         juce::juce_recommended_warning_flags
 )
 
+target_compile_definitions(NeomorphX1
+    PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+)
+
 if(UNIX AND NOT APPLE)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(FREETYPE REQUIRED freetype2)
