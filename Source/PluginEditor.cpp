@@ -161,7 +161,11 @@ void NeomorphX1AudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
         const float relX = static_cast<float> (event.x) / static_cast<float> (getWidth());
         const float relY = static_cast<float> (event.y) / static_cast<float> (getHeight());
 
-        lastClickedCoords = juce::String::formatted ("Rel X: %.4ff  |  Rel Y: %.4ff", relX, relY);
+        const auto coordPair = juce::String::formatted ("{ %.4ff, %.4ff },", relX, relY);
+        juce::SystemClipboard::copyTextToClipboard (coordPair);
+
+        lastClickedCoords = "Kopiert: " + coordPair;
         repaint();
     }
 }
+
