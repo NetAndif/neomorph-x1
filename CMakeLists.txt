@@ -68,6 +68,7 @@ target_sources(NeomorphX1
         Source/PluginProcessor.h
         Source/PluginEditor.cpp
         Source/PluginEditor.h
+		Source/CyberpunkLookAndFeel.h
 )
 
 # Linken gegen BinaryData (falls vorhanden) und JUCE Module

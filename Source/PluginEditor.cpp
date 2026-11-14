@@ -4,6 +4,8 @@
 NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
+    setLookAndFeel (&cyberpunkLookAndFeel);
+
     // Haupt-Hintergrund aus BinaryData laden
     backgroundImage = juce::ImageCache::getFromMemory (BinaryData::background_main_png,
                                                        BinaryData::background_main_pngSize);
@@ -32,6 +34,60 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
     settingsButton.onClick = [this] { showSettingsMenu(); };
     addAndMakeVisible (settingsButton);
 
+    // 10 Matrix-Drehregler konfigurieren & an APVTS binden
+    for (size_t i = 0; i < matrixKnobs.size(); ++i)
+    {
+        auto& knob = matrixKnobs[i];
+        knob.setSliderStyle (juce::Slider::RotaryVerticalDrag);
+        knob.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        knob.setColour (juce::Slider::rotarySliderFillColourId, juce::Colour::fromRGB (0, 240, 255));
+        knob.setDoubleClickReturnValue (true, 0.5);
+
+        knob.onValueChange = [this, i]
+        {
+            const int pct = juce::roundToInt (matrixKnobs[i].getValue() * 100.0);
+            hudStatusText = juce::String::formatted ("ASSIGN %d: %d%%", static_cast<int> (i + 1), pct);
+            repaint();
+        };
+
+        addAndMakeVisible (knob);
+
+        const auto paramID = "knob_" + juce::String (static_cast<int> (i + 1));
+        knobAttachments[i] = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+            audioProcessor.apvts, paramID, knob);
+    }
+
+    // 3 Scene-Fader konfigurieren & an APVTS binden
+    const char* faderParamIDs[3] = { "scene_1", "scene_morph", "scene_2" };
+    const char* faderLabels[3]   = { "SCENE 1", "MORPH", "SCENE 2" };
+    const juce::Colour faderColours[3] = {
+        juce::Colour::fromRGB (0, 240, 255),   // Cyan
+        juce::Colour::fromRGB (255, 60, 180),  // Neon-Magenta für Morph
+        juce::Colour::fromRGB (0, 240, 255)    // Cyan
+    };
+
+    for (size_t i = 0; i < sceneFaders.size(); ++i)
+    {
+        auto& fader = sceneFaders[i];
+        fader.setSliderStyle (juce::Slider::LinearVertical);
+        fader.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        fader.setColour (juce::Slider::thumbColourId, faderColours[i]);
+        fader.setDoubleClickReturnValue (true, i == 1 ? 0.0 : 0.8);
+
+        const juce::String label (faderLabels[i]);
+        fader.onValueChange = [this, i, label]
+        {
+            const int pct = juce::roundToInt (sceneFaders[i].getValue() * 100.0);
+            hudStatusText = label + ": " + juce::String (pct) + "%";
+            repaint();
+        };
+
+        addAndMakeVisible (fader);
+
+        faderAttachments[i] = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+            audioProcessor.apvts, faderParamIDs[i], fader);
+    }
+
     // Standardgröße (16:9 Verhältnis passend zum Artwork) + Skalierbarkeit
     setResizable (true, true);
     getConstrainer()->setFixedAspectRatio (16.0 / 9.0);
@@ -41,6 +97,7 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
 
 NeomorphX1AudioProcessorEditor::~NeomorphX1AudioProcessorEditor()
 {
+    setLookAndFeel (nullptr);
 }
 
 void NeomorphX1AudioProcessorEditor::setActiveTab (ActiveTab newTab)
@@ -60,7 +117,6 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
     menu.addItem (1, "Init Patch (Reset)");
     menu.addSeparator();
 
-    // Submenü für GUI-Skalierung
     juce::PopupMenu scaleMenu;
     scaleMenu.addItem (10, "80%  (896 x 504)");
     scaleMenu.addItem (11, "100% (1120 x 630)");
@@ -68,7 +124,6 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
     scaleMenu.addItem (13, "150% (1680 x 945)");
     menu.addSubMenu ("UI Scale", scaleMenu);
 
-    // In der Standalone-App direkten Zugriff auf Audio/MIDI-Settings anbieten
     if (auto* holder = juce::StandalonePluginHolder::getInstance())
     {
         menu.addSeparator();
@@ -80,6 +135,12 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
     {
         switch (result)
         {
+            case 1:
+                for (auto* param : audioProcessor.getParameters())
+                    param->setValueNotifyingHost (param->getDefaultValue());
+                hudStatusText = "INIT PATCH LOADED";
+                repaint();
+                break;
             case 10: setSize (896, 504);   break;
             case 11: setSize (1120, 630);  break;
             case 12: setSize (1400, 788);  break;
@@ -109,15 +170,15 @@ void NeomorphX1AudioProcessorEditor::paint (juce::Graphics& g)
     if (activeOverlay.isValid())
         g.drawImage (activeOverlay, bounds, juce::RectanglePlacement::stretchToFit);
 
-    // 3. Dev-Koordinaten-Anzeige (erscheint nach Rechtsklick)
-    if (lastClickedCoords.isNotEmpty())
+    // 3. HUD-Status / Koordinaten-Anzeige unten links
+    if (hudStatusText.isNotEmpty())
     {
         auto infoBox = juce::Rectangle<float> (12.0f, bounds.getHeight() - 32.0f, 340.0f, 22.0f);
         g.setColour (juce::Colours::black.withAlpha (0.8f));
         g.fillRoundedRectangle (infoBox, 4.0f);
         g.setColour (juce::Colour::fromRGB (0, 240, 255));
         g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-        g.drawText (lastClickedCoords, infoBox, juce::Justification::centred);
+        g.drawText (hudStatusText, infoBox, juce::Justification::centred);
     }
 }
 
@@ -126,7 +187,7 @@ void NeomorphX1AudioProcessorEditor::resized()
     const float w = static_cast<float> (getWidth());
     const float h = static_cast<float> (getHeight());
 
-    // Relative Positionen der 6 Tab-Reiter
+    // 1. Relative Positionen der 6 Tab-Reiter
     const float tabStartX = 0.305f;
     const float tabY      = 0.208f;
     const float tabH      = 0.036f;
@@ -144,7 +205,7 @@ void NeomorphX1AudioProcessorEditor::resized()
         currentX += tabWidths[i];
     }
 
-    // Settings-Icon oben rechts (Zentrum bei Rel X: 0.9515f, Rel Y: 0.0343f)
+    // 2. Settings-Icon oben rechts
     const float iconSize = 0.032f * w;
     settingsButton.setBounds (
         juce::roundToInt (0.9515f * w - iconSize * 0.5f),
@@ -152,6 +213,46 @@ void NeomorphX1AudioProcessorEditor::resized()
         juce::roundToInt (iconSize),
         juce::roundToInt (iconSize)
     );
+
+    // 3. Die 10 Matrix-Drehregler (exakt aus deinen Messwerten)
+    constexpr std::array<std::pair<float, float>, 10> knobCoords = {{
+        { 0.8490f, 0.2054f }, { 0.9175f, 0.2087f },
+        { 0.8496f, 0.3413f }, { 0.9181f, 0.3424f },
+        { 0.8496f, 0.4750f }, { 0.9187f, 0.4772f },
+        { 0.8502f, 0.6217f }, { 0.9181f, 0.6261f },
+        { 0.8490f, 0.7750f }, { 0.9175f, 0.7728f }
+    }};
+
+    const float knobDiameter = 0.056f * w;
+    for (size_t i = 0; i < matrixKnobs.size(); ++i)
+    {
+        const float cx = knobCoords[i].first  * w;
+        const float cy = knobCoords[i].second * h;
+        matrixKnobs[i].setBounds (
+            juce::roundToInt (cx - knobDiameter * 0.5f),
+            juce::roundToInt (cy - knobDiameter * 0.5f),
+            juce::roundToInt (knobDiameter),
+            juce::roundToInt (knobDiameter)
+        );
+    }
+
+    // 4. Die 3 Scene-Fader (aus deinen oberen/unteren Schlitz-Messwerten)
+    constexpr float faderX[3] = { 0.2823f, 0.3542f, 0.4265f };
+    const float faderTopY     = 0.6148f * h - 10.0f; // +10px Puffer für die Kappe oben
+    const float faderBottomY  = 0.8185f * h + 10.0f; // +10px Puffer für die Kappe unten
+    const float faderHeight   = faderBottomY - faderTopY;
+    const float faderWidth    = 0.036f * w;
+
+    for (size_t i = 0; i < sceneFaders.size(); ++i)
+    {
+        const float cx = faderX[i] * w;
+        sceneFaders[i].setBounds (
+            juce::roundToInt (cx - faderWidth * 0.5f),
+            juce::roundToInt (faderTopY),
+            juce::roundToInt (faderWidth),
+            juce::roundToInt (faderHeight)
+        );
+    }
 }
 
 void NeomorphX1AudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
@@ -164,8 +265,7 @@ void NeomorphX1AudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
         const auto coordPair = juce::String::formatted ("{ %.4ff, %.4ff },", relX, relY);
         juce::SystemClipboard::copyTextToClipboard (coordPair);
 
-        lastClickedCoords = "Kopiert: " + coordPair;
+        hudStatusText = "Kopiert: " + coordPair;
         repaint();
     }
 }
-

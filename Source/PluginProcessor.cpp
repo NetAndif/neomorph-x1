@@ -11,9 +11,65 @@ NeomorphX1AudioProcessor::NeomorphX1AudioProcessor()
                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                      #endif
                        ),
-       apvts (*this, nullptr, "Parameters", createParameterLayout())
+       apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
+#else
+     : apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
 #endif
 {
+}
+
+juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::createParameterLayout()
+{
+    std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+
+    // 10 Matrix-Drehregler (rechts)
+    const juce::StringArray knobNames = {
+        "Assign 1", "Assign 2",
+        "Assign 3", "Assign 4",
+        "Assign 5", "Assign 6",
+        "Assign 7", "Assign 8",
+        "Assign 9", "Assign 10"
+    };
+
+    for (int i = 0; i < 10; ++i)
+    {
+        const auto paramID = "knob_" + juce::String (i + 1);
+        params.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { paramID, 1 },
+            knobNames[i],
+            juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
+            0.5f
+        ));
+    }
+
+    // 3 Scene-Fader (unten links/mitte)
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "scene_1", 1 }, "Scene 1 Level",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.8f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "scene_morph", 1 }, "Scene Morph",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "scene_2", 1 }, "Scene 2 Level",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.8f));
+
+    return { params.begin(), params.end() };
+}
+
+void NeomorphX1AudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+{
+    auto state = apvts.copyState();
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    copyXmlToBinary (*xml, destData);
+}
+
+void NeomorphX1AudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+{
+    std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
+    if (xmlState != nullptr && xmlState->hasTagName (apvts.state.getType()))
+        apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
 }
 
 NeomorphX1AudioProcessor::~NeomorphX1AudioProcessor()
