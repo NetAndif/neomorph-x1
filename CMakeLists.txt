@@ -47,7 +47,7 @@ endif()
 
 # Plugin-Target definieren
 juce_add_plugin(NeomorphX1
-    COMPANY_NAME "YourStudio"
+    COMPANY_NAME "NetAndif"
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
     IS_MIDI_EFFECT FALSE
@@ -56,7 +56,8 @@ juce_add_plugin(NeomorphX1
     PLUGIN_MANUFACTURER_CODE Neom
     PLUGIN_CODE Nmx1
     FORMATS VST3 AU Standalone
-    PRODUCT_NAME "Neomorph X1"
+    PRODUCT_NAME "NeomorphX1"
+	PLUGIN_NAME "Neomorph X1"
 )
 
 # Generiert automatisch die benötigte JuceHeader.h für CMake Targets
