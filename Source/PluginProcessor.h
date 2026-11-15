@@ -42,12 +42,6 @@ public:
     void resetSceneParameters (int scene);
     void randomizeSceneParameters (int scene);
 
-    juce::AudioProcessorValueTreeState apvts;
-
-private:
-    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
-
-    // --- Echtzeit-Parameter-Cache für lockfreien Audio-Thread ---
     struct OscParamPointers
     {
         std::atomic<float>* wave     = nullptr;
@@ -99,6 +93,10 @@ private:
         std::array<std::atomic<float>*, 10> matrixKnobs {};
     };
 
+    juce::AudioProcessorValueTreeState apvts;
+
+private:
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void cacheParameterPointers();
 
     EngineParamCache paramCache;

@@ -26,7 +26,7 @@ namespace
             const float a2     = g * a1;
             const float a3     = g * a2;
 
-            auto filterChannel = [g, k, a1, a2, a3, mode] (float v0, float& ic1, float& ic2) -> float
+            auto filterChannel = [k, a1, a2, a3, mode] (float v0, float& ic1, float& ic2) -> float
             {
                 const float v3 = v0 - ic2;
                 const float v1 = a1 * ic1 + a2 * v3;
@@ -128,7 +128,8 @@ namespace
     class NeomorphVoice : public juce::SynthesiserVoice
     {
     public:
-        explicit NeomorphVoice (const auto& cacheRef) : cache (cacheRef) {}
+        explicit NeomorphVoice (const NeomorphX1AudioProcessor::EngineParamCache& cacheRef)
+            : cache (cacheRef) {}
 
         bool canPlaySound (juce::SynthesiserSound* sound) override
         {
@@ -224,7 +225,7 @@ namespace
             // Kombinierter Pitchbend (MIDI Hardware + UI-Pitchwheel, +/- 2 Halbtöne)
             const float totalPitchSemi = juce::jlimit (-1.0f, 1.0f, pitchWheelNorm + uiPitch) * 2.0f;
 
-            // Equal-Power-ähnlicher Crossfade zwischen Scene 1 und Scene 2
+            // Crossfade zwischen Scene 1 und Scene 2
             const float weight1 = s1Gain * (1.0f - morphVal);
             const float weight2 = s2Gain * morphVal;
 
@@ -391,7 +392,7 @@ namespace
             state.modEnv.setParameters (modP);
         }
 
-        const decltype (NeomorphX1AudioProcessor::paramCache)& cache;
+        const NeomorphX1AudioProcessor::EngineParamCache& cache;
         std::array<SceneVoiceState, 2> sceneStates;
         int currentMidiNote  = 60;
         float noteVelocity   = 0.0f;
