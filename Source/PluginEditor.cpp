@@ -443,7 +443,7 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
     scaleMenu.addItem (13, "150% (1680 x 945)");
     menu.addSubMenu ("UI Scale", scaleMenu);
 
-    if (juce::StandalonePluginHolder::getInstance() != nullptr)
+	if (audioProcessor.wrapperType == juce::AudioProcessor::wrapperType_Standalone)
     {
         menu.addSeparator();
         menu.addItem (20, "Audio / MIDI Settings...");
@@ -475,9 +475,9 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
             case 11: setSize (1120, 630);  break;
             case 12: setSize (1400, 788);  break;
             case 13: setSize (1680, 945);  break;
-            case 20:
-                if (auto* holder = juce::StandalonePluginHolder::getInstance())
-                    holder->showAudioSettingsDialog();
+			case 20:
+                if (auto* topLevel = getTopLevelComponent())
+                    topLevel->postCommandMessage (1000); // Öffnet den Audio-/MIDI-Dialog im JUCE Standalone-Fenster
                 break;
             default:
                 break;
