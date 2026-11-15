@@ -76,6 +76,53 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "mod_wheel", 1 }, "Mod Wheel",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f));
+		
+	// 4. Oscillators Tab (OSC 1 & OSC 2 - Wavetable / Morph Architecture)
+    const juce::StringArray waveforms = {
+        "Basic Analog", "PWM / Pulse", "Formant", "Digital Fold", "SuperSaw", "Vocal Morph"
+    };
+
+    for (int osc = 1; osc <= 2; ++osc)
+    {
+        const auto prefix = "osc" + juce::String (osc) + "_";
+        const auto label  = "Osc " + juce::String (osc) + " ";
+
+        params.push_back (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { prefix + "wave", 1 }, label + "Wavetable",
+            waveforms, osc == 1 ? 0 : 1));
+
+        params.push_back (std::make_unique<juce::AudioParameterInt> (
+            juce::ParameterID { prefix + "octave", 1 }, label + "Octave",
+            -2, 2, 0));
+
+        params.push_back (std::make_unique<juce::AudioParameterInt> (
+            juce::ParameterID { prefix + "semi", 1 }, label + "Semitone",
+            -12, 12, 0));
+
+        params.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { prefix + "detune", 1 }, label + "Detune",
+            juce::NormalisableRange<float> (-50.0f, 50.0f, 0.1f), 0.0f));
+
+        params.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { prefix + "position", 1 }, label + "Position",
+            juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.25f));
+
+        params.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { prefix + "morph", 1 }, label + "Morph",
+            juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f));
+
+        params.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { prefix + "phase", 1 }, label + "Phase",
+            juce::NormalisableRange<float> (0.0f, 360.0f, 1.0f), 0.0f));
+
+        params.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { prefix + "pan", 1 }, label + "Pan",
+            juce::NormalisableRange<float> (-1.0f, 1.0f, 0.01f), 0.0f));
+
+        params.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { prefix + "level", 1 }, label + "Level",
+            juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), osc == 1 ? 0.85f : 0.65f));
+    }
 
     return { params.begin(), params.end() };
 }

@@ -42,8 +42,38 @@ public:
     void mouseDown (const juce::MouseEvent& event) override;
 
 private:
+    struct OscillatorControls
+    {
+        juce::ComboBox waveBox;
+
+        juce::Slider octaveKnob;
+        juce::Slider semiKnob;
+        juce::Slider detuneKnob;
+        juce::Slider positionKnob;
+
+        juce::Slider morphKnob;
+        juce::Slider phaseKnob;
+        juce::Slider panKnob;
+        juce::Slider levelKnob;
+
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> waveAttachment;
+
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   octaveAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   semiAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   detuneAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   positionAttachment;
+
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   morphAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   phaseAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   panAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   levelAttachment;
+    };
+
     void setActiveTab (ActiveTab newTab);
+    void updateTabVisibility();
     void showSettingsMenu();
+    void drawOscillatorSection (juce::Graphics& g, juce::Rectangle<float> panelBounds,
+                                int oscIndex, juce::Colour accentColour);
 
     NeomorphX1AudioProcessor& audioProcessor;
     CyberpunkLookAndFeel cyberpunkLookAndFeel;
@@ -66,6 +96,9 @@ private:
     SpringBackSlider modWheel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> pitchWheelAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> modWheelAttachment;
+
+    // Tab 1: Oscillators (links OSC 1, rechts OSC 2)
+    std::array<OscillatorControls, 2> oscControls;
 
     ActiveTab currentTab = ActiveTab::Oscillators;
 
