@@ -72,7 +72,7 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
         fader.setSliderStyle (juce::Slider::LinearVertical);
         fader.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         fader.setColour (juce::Slider::thumbColourId, faderColours[i]);
-        fader.setDoubleClickReturnValue (true, i == 1 ? 0.0 : 0.8);
+        fader.setDoubleClickReturnValue (true, i == 1 ? 0.5 : 0.5);
 
         const juce::String label (faderLabels[i]);
         fader.onValueChange = [this, i, label]
