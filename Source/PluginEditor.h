@@ -6,6 +6,20 @@
 #include "CyberpunkLookAndFeel.h"
 #include "BinaryData.h"
 
+class SpringBackSlider : public juce::Slider
+{
+public:
+    bool springBackEnabled = false;
+    double restingValue    = 0.0;
+
+    void mouseUp (const juce::MouseEvent& event) override
+    {
+        juce::Slider::mouseUp (event);
+        if (springBackEnabled)
+            setValue (restingValue, juce::sendNotificationSync);
+    }
+};
+
 class NeomorphX1AudioProcessorEditor : public juce::AudioProcessorEditor
 {
 public:
@@ -46,6 +60,12 @@ private:
     // 3 Scene-Fader + APVTS-Attachments
     std::array<juce::Slider, 3> sceneFaders;
     std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>, 3> faderAttachments;
+
+    // Pitch- & Mod-Wheel + APVTS-Attachments
+    SpringBackSlider pitchWheel;
+    SpringBackSlider modWheel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> pitchWheelAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> modWheelAttachment;
 
     ActiveTab currentTab = ActiveTab::Envelopes;
 

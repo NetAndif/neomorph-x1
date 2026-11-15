@@ -66,6 +66,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "ribbon_pos", 1 }, "Ribbon", juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.5f));
 
+	// Pitch- & Mod-Wheel (unten links)
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "pitch_wheel", 1 }, "Pitch Wheel",
+        juce::NormalisableRange<float> (-1.0f, 1.0f, 0.001f), 0.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { "mod_wheel", 1 }, "Mod Wheel",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f));
+
     return { params.begin(), params.end() };
 }
 
@@ -95,9 +104,26 @@ bool NeomorphX1AudioProcessor::isBusesLayoutSupported (const BusesLayout& layout
 
 void NeomorphX1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
-	juce::ignoreUnused (midiMessages);
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
+
+    for (const auto metadata : midiMessages)
+    {
+        const auto msg = metadata.getMessage();
+
+        if (msg.isPitchWheel())
+        {
+            const float normPitch = (static_cast<float> (msg.getPitchWheelValue()) - 8192.0f) / 8192.0f;
+            if (auto* param = apvts.getParameter ("pitch_wheel"))
+                param->setValueNotifyingHost (param->convertTo0to1 (juce::jlimit (-1.0f, 1.0f, normPitch)));
+        }
+        else if (msg.isController() && msg.getControllerNumber() == 1)
+        {
+            const float normMod = static_cast<float> (msg.getControllerValue()) / 127.0f;
+            if (auto* param = apvts.getParameter ("mod_wheel"))
+                param->setValueNotifyingHost (normMod);
+        }
+    }
 }
 
 bool NeomorphX1AudioProcessor::hasEditor() const { return true; }

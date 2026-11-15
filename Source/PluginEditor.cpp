@@ -61,9 +61,9 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
     const char* faderParamIDs[3] = { "scene_1", "scene_morph", "scene_2" };
     const char* faderLabels[3]   = { "SCENE 1", "MORPH", "SCENE 2" };
     const juce::Colour faderColours[3] = {
-        juce::Colour::fromRGB (0, 240, 255),   // Cyan
-        juce::Colour::fromRGB (255, 60, 180),  // Neon-Magenta für Morph
-        juce::Colour::fromRGB (0, 240, 255)    // Cyan
+        juce::Colour::fromRGB (0, 240, 255),
+        juce::Colour::fromRGB (255, 60, 180),
+        juce::Colour::fromRGB (0, 240, 255)
     };
 
     for (size_t i = 0; i < sceneFaders.size(); ++i)
@@ -87,6 +87,39 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
         faderAttachments[i] = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
             audioProcessor.apvts, faderParamIDs[i], fader);
     }
+
+    // Pitch-Wheel (bipolar -1.0 .. +1.0, federt zur Mitte zurück)
+    pitchWheel.setSliderStyle (juce::Slider::LinearVertical);
+    pitchWheel.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    pitchWheel.getProperties().set ("isWheel", true);
+    pitchWheel.setColour (juce::Slider::thumbColourId, juce::Colour::fromRGB (0, 240, 255));
+    pitchWheel.springBackEnabled = true;
+    pitchWheel.restingValue      = 0.0;
+    pitchWheel.onValueChange = [this]
+    {
+        const int pct = juce::roundToInt (pitchWheel.getValue() * 100.0);
+        hudStatusText = juce::String::formatted ("PITCH BEND: %+d%%", pct);
+        repaint();
+    };
+    addAndMakeVisible (pitchWheel);
+    pitchWheelAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        audioProcessor.apvts, "pitch_wheel", pitchWheel);
+
+    // Mod-Wheel (unipolar 0.0 .. 1.0, bleibt stehen)
+    modWheel.setSliderStyle (juce::Slider::LinearVertical);
+    modWheel.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    modWheel.getProperties().set ("isWheel", true);
+    modWheel.setColour (juce::Slider::thumbColourId, juce::Colour::fromRGB (255, 60, 180));
+    modWheel.setDoubleClickReturnValue (true, 0.0);
+    modWheel.onValueChange = [this]
+    {
+        const int pct = juce::roundToInt (modWheel.getValue() * 100.0);
+        hudStatusText = juce::String::formatted ("MOD WHEEL: %d%%", pct);
+        repaint();
+    };
+    addAndMakeVisible (modWheel);
+    modWheelAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        audioProcessor.apvts, "mod_wheel", modWheel);
 
     // Standardgröße (16:9 Verhältnis passend zum Artwork) + Skalierbarkeit
     setResizable (true, true);
@@ -214,7 +247,7 @@ void NeomorphX1AudioProcessorEditor::resized()
         juce::roundToInt (iconSize)
     );
 
-    // 3. Die 10 Matrix-Drehregler (exakt aus deinen Messwerten)
+    // 3. Die 10 Matrix-Drehregler
     constexpr std::array<std::pair<float, float>, 10> knobCoords = {{
         { 0.8490f, 0.2054f }, { 0.9175f, 0.2087f },
         { 0.8496f, 0.3413f }, { 0.9181f, 0.3424f },
@@ -236,10 +269,10 @@ void NeomorphX1AudioProcessorEditor::resized()
         );
     }
 
-    // 4. Die 3 Scene-Fader (aus deinen oberen/unteren Schlitz-Messwerten)
+    // 4. Die 3 Scene-Fader
     constexpr float faderX[3] = { 0.2823f, 0.3542f, 0.4265f };
-    const float faderTopY     = 0.6148f * h - 10.0f; // +10px Puffer für die Kappe oben
-    const float faderBottomY  = 0.8185f * h + 10.0f; // +10px Puffer für die Kappe unten
+    const float faderTopY     = 0.6148f * h - 10.0f;
+    const float faderBottomY  = 0.8185f * h + 10.0f;
     const float faderHeight   = faderBottomY - faderTopY;
     const float faderWidth    = 0.036f * w;
 
@@ -253,6 +286,26 @@ void NeomorphX1AudioProcessorEditor::resized()
             juce::roundToInt (faderHeight)
         );
     }
+
+    // 5. Pitch- & Mod-Wheel (unten links: X = 0.1024f und 0.1728f, Y = 0.6290f .. 0.8444f)
+    const float wheelTopY    = 0.6290f * h;
+    const float wheelBottomY = 0.8444f * h;
+    const float wheelHeight  = wheelBottomY - wheelTopY;
+    const float wheelWidth   = 0.042f * w;
+
+    pitchWheel.setBounds (
+        juce::roundToInt (0.1024f * w - wheelWidth * 0.5f),
+        juce::roundToInt (wheelTopY),
+        juce::roundToInt (wheelWidth),
+        juce::roundToInt (wheelHeight)
+    );
+
+    modWheel.setBounds (
+        juce::roundToInt (0.1728f * w - wheelWidth * 0.5f),
+        juce::roundToInt (wheelTopY),
+        juce::roundToInt (wheelWidth),
+        juce::roundToInt (wheelHeight)
+    );
 }
 
 void NeomorphX1AudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
