@@ -279,7 +279,7 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
     scaleMenu.addItem (13, "150% (1680 x 945)");
     menu.addSubMenu ("UI Scale", scaleMenu);
 
-    if (auto* holder = juce::StandalonePluginHolder::getInstance())
+    if (juce::StandalonePluginHolder::getInstance() != nullptr)
     {
         menu.addSeparator();
         menu.addItem (20, "Audio / MIDI Settings...");
@@ -547,3 +547,103 @@ void NeomorphX1AudioProcessorEditor::resized()
             juce::roundToInt (knobDiameter),
             juce::roundToInt (knobDiameter)
         );
+    }
+
+    // 4. Die 3 Scene-Fader
+    constexpr float faderX[3] = { 0.2823f, 0.3542f, 0.4265f };
+    const float faderTopY     = 0.6148f * h - 10.0f;
+    const float faderBottomY  = 0.8185f * h + 10.0f;
+    const float faderHeight   = faderBottomY - faderTopY;
+    const float faderWidth    = 0.036f * w;
+
+    for (size_t i = 0; i < sceneFaders.size(); ++i)
+    {
+        const float cx = faderX[i] * w;
+        sceneFaders[i].setBounds (
+            juce::roundToInt (cx - faderWidth * 0.5f),
+            juce::roundToInt (faderTopY),
+            juce::roundToInt (faderWidth),
+            juce::roundToInt (faderHeight)
+        );
+    }
+
+    // 5. Pitch- & Mod-Wheel
+    const float wheelTopY    = 0.6290f * h;
+    const float wheelBottomY = 0.8444f * h;
+    const float wheelHeight  = wheelBottomY - wheelTopY;
+    const float wheelWidth   = 0.042f * w;
+
+    pitchWheel.setBounds (
+        juce::roundToInt (0.1024f * w - wheelWidth * 0.5f),
+        juce::roundToInt (wheelTopY),
+        juce::roundToInt (wheelWidth),
+        juce::roundToInt (wheelHeight)
+    );
+
+    modWheel.setBounds (
+        juce::roundToInt (0.1728f * w - wheelWidth * 0.5f),
+        juce::roundToInt (wheelTopY),
+        juce::roundToInt (wheelWidth),
+        juce::roundToInt (wheelHeight)
+    );
+
+    // 6. Tab 1: Oscillators Layout (links OSC 1 ab X = 0.255f, rechts OSC 2 ab X = 0.520f)
+    const float oscPanelX[2] = { 0.255f, 0.520f };
+    const float panelY       = 0.268f * h;
+    const float panelW       = 0.252f * w;
+    const float oscKnobSize  = 0.036f * w;
+
+    for (size_t i = 0; i < oscControls.size(); ++i)
+    {
+        auto& osc = oscControls[i];
+        const float px = oscPanelX[i] * w;
+
+        // Oben links im Panel: Wavetable-Dropdown
+        osc.waveBox.setBounds (
+            juce::roundToInt (px + 0.010f * w),
+            juce::roundToInt (panelY + 0.044f * h),
+            juce::roundToInt (0.118f * w),
+            juce::roundToInt (0.034f * h)
+        );
+
+        // Darunter: 2 Reihen à 4 Regler (OCT, SEMI, DETUNE, POS / MORPH, PHASE, PAN, LEVEL)
+        const float row1Y = panelY + 0.128f * h;
+        const float row2Y = panelY + 0.222f * h;
+
+        auto placeKnob = [px, panelW, oscKnobSize] (juce::Slider& k, int col, float cy)
+        {
+            const float cx = px + panelW * (0.14f + static_cast<float> (col) * 0.24f);
+            k.setBounds (
+                juce::roundToInt (cx - oscKnobSize * 0.5f),
+                juce::roundToInt (cy - oscKnobSize * 0.5f),
+                juce::roundToInt (oscKnobSize),
+                juce::roundToInt (oscKnobSize)
+            );
+        };
+
+        placeKnob (osc.octaveKnob,   0, row1Y);
+        placeKnob (osc.semiKnob,     1, row1Y);
+        placeKnob (osc.detuneKnob,   2, row1Y);
+        placeKnob (osc.positionKnob, 3, row1Y);
+
+        placeKnob (osc.morphKnob,    0, row2Y);
+        placeKnob (osc.phaseKnob,    1, row2Y);
+        placeKnob (osc.panKnob,      2, row2Y);
+        placeKnob (osc.levelKnob,    3, row2Y);
+    }
+}
+
+void NeomorphX1AudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
+{
+    if (event.mods.isRightButtonDown())
+    {
+        const float relX = static_cast<float> (event.x) / static_cast<float> (getWidth());
+        const float relY = static_cast<float> (event.y) / static_cast<float> (getHeight());
+
+        const auto coordPair = juce::String::formatted ("{ %.4ff, %.4ff },", relX, relY);
+        juce::SystemClipboard::copyTextToClipboard (coordPair);
+
+        hudStatusText = "Kopiert: " + coordPair;
+        repaint();
+    }
+}
