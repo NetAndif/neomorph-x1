@@ -77,7 +77,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
         juce::ParameterID { "mod_wheel", 1 }, "Mod Wheel",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f));
 
-    // 4. Dual-Scene Oscillators Tab (s1_ & s2_ für SCENE 1 und SCENE 2)
+    // 4. Dual-Scene Parameter (s1_ & s2_ für SCENE 1 und SCENE 2)
     const juce::StringArray waveforms = {
         "Basic Analog", "PWM / Pulse", "Formant", "Digital Fold", "SuperSaw", "Vocal Morph"
     };
@@ -87,6 +87,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
         const auto scenePrefix = "s" + juce::String (scene) + "_";
         const auto sceneLabel  = "S" + juce::String (scene) + " ";
 
+        // 4a. Oscillators Tab (osc1 & osc2)
         for (int osc = 1; osc <= 2; ++osc)
         {
             const auto prefix = scenePrefix + "osc" + juce::String (osc) + "_";
@@ -136,6 +137,38 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
                 juce::ParameterID { prefix + "level", 1 }, label + "Level",
                 juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
                 osc == 1 ? 0.85f : 0.65f));
+        }
+
+        // 4b. Envelopes Tab (env1 = Amp EG, env2 = Filter/Mod EG)
+        const char* envNames[2] = { "Amp Env ", "Filter Env " };
+        for (int env = 1; env <= 2; ++env)
+        {
+            const auto prefix = scenePrefix + "env" + juce::String (env) + "_";
+            const auto label  = sceneLabel + envNames[env - 1];
+
+            // Logarithmische Skew-Kurve (0.35f) für feine Auflösung im Millisekunden-Bereich
+            juce::NormalisableRange<float> timeRange (0.001f, 10.0f, 0.001f, 0.35f);
+
+            const float defaultAttack  = (env == 1) ? 0.012f : 0.045f;
+            const float defaultDecay   = (env == 1) ? 0.350f : 0.600f;
+            const float defaultSustain = (env == 1) ? 0.750f : 0.350f;
+            const float defaultRelease = (env == 1) ? 0.400f : 0.550f;
+
+            params.push_back (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { prefix + "attack", 1 }, label + "Attack",
+                timeRange, defaultAttack));
+
+            params.push_back (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { prefix + "decay", 1 }, label + "Decay",
+                timeRange, defaultDecay));
+
+            params.push_back (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { prefix + "sustain", 1 }, label + "Sustain",
+                juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), defaultSustain));
+
+            params.push_back (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { prefix + "release", 1 }, label + "Release",
+                timeRange, defaultRelease));
         }
     }
 
@@ -222,6 +255,8 @@ void NeomorphX1AudioProcessor::randomizeSceneParameters (int scene)
                     rangedParam->setValueNotifyingHost (rangedParam->convertTo0to1 (static_cast<float> (rng.nextInt ({ -1, 2 }))));
                 else if (id.endsWith ("_semi"))
                     rangedParam->setValueNotifyingHost (0.5f);
+                else if (id.endsWith ("_attack"))
+                    rangedParam->setValueNotifyingHost (rng.nextFloat() * 0.45f);
                 else
                     rangedParam->setValueNotifyingHost (rng.nextFloat());
             }

@@ -249,8 +249,62 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
             [] (double v) { return juce::String::formatted ("%d%%", juce::roundToInt (v * 100.0)); });
     }
 
+    // --- Tab 3: Envelopes Controls initialisieren (links Amp EG, rechts Filter/Mod EG) ---
+    auto formatEnvTime = [] (double sec) -> juce::String
+    {
+        if (sec < 1.0)
+            return juce::String::formatted ("%d MS", juce::roundToInt (sec * 1000.0));
+        return juce::String::formatted ("%.2f S", sec);
+    };
+
+    for (size_t i = 0; i < envControls.size(); ++i)
+    {
+        auto& env = envControls[i];
+        const int envNum    = static_cast<int> (i + 1);
+        const auto envTitle = (i == 0) ? "AMP EG" : "MOD EG";
+        const auto accent   = (i == 0) ? juce::Colour::fromRGB (0, 240, 255)
+                                       : juce::Colour::fromRGB (255, 60, 180);
+
+        auto setupEnvKnob = [this, accent, envNum, envTitle] (juce::Slider& slider,
+                                                              const juce::String& paramSuffix,
+                                                              const juce::String& paramName,
+                                                              std::function<juce::String (double)> formatVal)
+        {
+            slider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
+            slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+            slider.setColour (juce::Slider::rotarySliderFillColourId, accent);
+            slider.getProperties().set ("isBipolar", false);
+
+            slider.onValueChange = [this, &slider, envNum, envTitle, paramSuffix, paramName, formatVal]
+            {
+                if (sceneLink)
+                {
+                    const int otherScene = (editingScene == 1) ? 2 : 1;
+                    const auto srcID = "s" + juce::String (editingScene) + "_env" + juce::String (envNum) + "_" + paramSuffix;
+                    const auto dstID = "s" + juce::String (otherScene)   + "_env" + juce::String (envNum) + "_" + paramSuffix;
+                    if (auto* srcP = audioProcessor.apvts.getParameter (srcID))
+                        if (auto* dstP = audioProcessor.apvts.getParameter (dstID))
+                            dstP->setValueNotifyingHost (srcP->getValue());
+                }
+
+                triggerLcdNotification (juce::String::formatted ("S%d // %s %s", editingScene, envTitle, paramName.toRawUTF8()),
+                                        formatVal (slider.getValue()));
+            };
+
+            addChildComponent (slider);
+        };
+
+        setupEnvKnob (env.attackKnob,  "attack",  "ATTACK",  formatEnvTime);
+        setupEnvKnob (env.decayKnob,   "decay",   "DECAY",   formatEnvTime);
+        setupEnvKnob (env.sustainKnob, "sustain", "SUSTAIN", [] (double v) {
+            return juce::String::formatted ("%d%%", juce::roundToInt (v * 100.0));
+        });
+        setupEnvKnob (env.releaseKnob, "release", "RELEASE", formatEnvTime);
+    }
+
     // Attachments an die aktive Edit-Scene (Scene 1) binden
     bindOscillatorAttachments();
+    bindEnvelopeAttachments();
     updateTabVisibility();
 
     // Standardgröße (16:9 Verhältnis passend zum Artwork) + Skalierbarkeit
@@ -309,6 +363,7 @@ void NeomorphX1AudioProcessorEditor::setEditingScene (int newScene)
 
     editingScene = newScene;
     bindOscillatorAttachments();
+    bindEnvelopeAttachments();
 
     showLcdNotify = false;
     stopTimer();
@@ -410,6 +465,38 @@ void NeomorphX1AudioProcessorEditor::bindOscillatorAttachments()
     }
 }
 
+void NeomorphX1AudioProcessorEditor::bindEnvelopeAttachments()
+{
+    const auto scenePrefix = "s" + juce::String (editingScene) + "_";
+
+    for (size_t i = 0; i < envControls.size(); ++i)
+    {
+        auto& env = envControls[i];
+        const auto prefix = scenePrefix + "env" + juce::String (static_cast<int> (i + 1)) + "_";
+
+        env.attackAttachment.reset();
+        env.decayAttachment.reset();
+        env.sustainAttachment.reset();
+        env.releaseAttachment.reset();
+
+        auto bindSlider = [this] (juce::Slider& slider,
+                                  std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>& attachment,
+                                  const juce::String& paramID)
+        {
+            if (auto* param = audioProcessor.apvts.getParameter (paramID))
+                slider.setDoubleClickReturnValue (true, param->getDefaultValue());
+
+            attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+                audioProcessor.apvts, paramID, slider);
+        };
+
+        bindSlider (env.attackKnob,  env.attackAttachment,  prefix + "attack");
+        bindSlider (env.decayKnob,   env.decayAttachment,   prefix + "decay");
+        bindSlider (env.sustainKnob, env.sustainAttachment, prefix + "sustain");
+        bindSlider (env.releaseKnob, env.releaseAttachment, prefix + "release");
+    }
+}
+
 void NeomorphX1AudioProcessorEditor::updateTabVisibility()
 {
     const bool showOsc = (currentTab == ActiveTab::Oscillators);
@@ -424,6 +511,15 @@ void NeomorphX1AudioProcessorEditor::updateTabVisibility()
         osc.phaseKnob.setVisible (showOsc);
         osc.panKnob.setVisible (showOsc);
         osc.levelKnob.setVisible (showOsc);
+    }
+
+    const bool showEnv = (currentTab == ActiveTab::Envelopes);
+    for (auto& env : envControls)
+    {
+        env.attackKnob.setVisible (showEnv);
+        env.decayKnob.setVisible (showEnv);
+        env.sustainKnob.setVisible (showEnv);
+        env.releaseKnob.setVisible (showEnv);
     }
 }
 
@@ -671,21 +767,17 @@ void NeomorphX1AudioProcessorEditor::drawSceneLeds (juce::Graphics& g, float w, 
 
         if (ledActive[i])
         {
-            // Äußerer LED-Glow
             g.setColour (col.withAlpha (0.35f));
             g.fillEllipse (cx - ledRadius * 2.1f, ledY - ledRadius * 2.1f, ledRadius * 4.2f, ledRadius * 4.2f);
 
-            // Leuchtender LED-Kern
             g.setColour (col);
             g.fillEllipse (cx - ledRadius, ledY - ledRadius, ledRadius * 2.0f, ledRadius * 2.0f);
 
-            // Kleiner Glanzpunkt
             g.setColour (juce::Colours::white.withAlpha (0.75f));
             g.fillEllipse (cx - ledRadius * 0.45f, ledY - ledRadius * 0.45f, ledRadius * 0.7f, ledRadius * 0.7f);
         }
         else
         {
-            // Ausgeschaltete LED leicht abdunkeln
             g.setColour (juce::Colour::fromRGB (14, 20, 28).withAlpha (0.75f));
             g.fillEllipse (cx - ledRadius, ledY - ledRadius, ledRadius * 2.0f, ledRadius * 2.0f);
         }
@@ -827,6 +919,118 @@ void NeomorphX1AudioProcessorEditor::drawOscillatorSection (juce::Graphics& g,
     drawKnobLabel (osc.levelKnob,    "LEVEL");
 }
 
+void NeomorphX1AudioProcessorEditor::drawEnvelopeSection (juce::Graphics& g,
+                                                          juce::Rectangle<float> panelBounds,
+                                                          int envIndex,
+                                                          juce::Colour accentColour)
+{
+    // 1. Sektions-Kasten
+    g.setColour (juce::Colour::fromRGB (10, 15, 24).withAlpha (0.74f));
+    g.fillRoundedRectangle (panelBounds, 6.0f);
+
+    g.setColour (accentColour.withAlpha (0.38f));
+    g.drawRoundedRectangle (panelBounds, 6.0f, 1.0f);
+
+    // 2. Sektions-Überschrift
+    auto headerArea = panelBounds.reduced (10.0f, 4.0f).removeFromTop (19.0f);
+    g.setColour (accentColour);
+    g.setFont (juce::FontOptions (14.5f, juce::Font::bold));
+    const juce::String title = (envIndex == 0) ? "AMP ENVELOPE" : "FILTER / MOD ENVELOPE";
+    g.drawText ("S" + juce::String (editingScene) + " // " + title,
+                headerArea, juce::Justification::centredLeft);
+
+    // 3. ADSR-Display oben im Panel
+    const auto& env = envControls[static_cast<size_t> (envIndex)];
+    const float displayTop    = panelBounds.getY() + panelBounds.getHeight() * 0.17f;
+    const float displayHeight = panelBounds.getHeight() * 0.44f;
+    auto adsrRect = juce::Rectangle<float> (panelBounds.getX() + 10.0f,
+                                            displayTop,
+                                            panelBounds.getWidth() - 20.0f,
+                                            displayHeight);
+
+    g.setColour (juce::Colour::fromRGB (6, 10, 16));
+    g.fillRoundedRectangle (adsrRect, 4.0f);
+    g.setColour (juce::Colour::fromRGB (35, 55, 75).withAlpha (0.7f));
+    g.drawRoundedRectangle (adsrRect, 4.0f, 1.0f);
+
+    // Subtile Rasterlinien im ADSR-Display
+    g.setColour (accentColour.withAlpha (0.10f));
+    g.drawHorizontalLine (juce::roundToInt (adsrRect.getCentreY()), adsrRect.getX() + 3.0f, adsrRect.getRight() - 3.0f);
+    for (int col = 1; col < 4; ++col)
+    {
+        const float gx = adsrRect.getX() + (adsrRect.getWidth() * 0.25f) * static_cast<float> (col);
+        g.drawVerticalLine (juce::roundToInt (gx), adsrRect.getY() + 3.0f, adsrRect.getBottom() - 3.0f);
+    }
+
+    // ADSR-Koordinaten visuell skalieren
+    const auto inner = adsrRect.reduced (8.0f, 8.0f);
+    const float aNorm = std::pow (juce::jlimit (0.0f, 10.0f, static_cast<float> (env.attackKnob.getValue()))  / 10.0f, 0.42f);
+    const float dNorm = std::pow (juce::jlimit (0.0f, 10.0f, static_cast<float> (env.decayKnob.getValue()))   / 10.0f, 0.42f);
+    const float sVal  = juce::jlimit (0.0f, 1.0f, static_cast<float> (env.sustainKnob.getValue()));
+    const float rNorm = std::pow (juce::jlimit (0.0f, 10.0f, static_cast<float> (env.releaseKnob.getValue())) / 10.0f, 0.42f);
+
+    const float segW    = inner.getWidth() * 0.26f;
+    const float startX  = inner.getX();
+    const float baseY   = inner.getBottom();
+    const float topY    = inner.getY();
+
+    const float atkX    = startX + juce::jmax (4.0f, aNorm * segW);
+    const float decX    = atkX   + juce::jmax (4.0f, dNorm * segW);
+    const float susY    = baseY  - sVal * inner.getHeight();
+    const float susEndX = decX   + inner.getWidth() * 0.20f;
+    const float relX    = juce::jmin (inner.getRight(), susEndX + juce::jmax (4.0f, rNorm * segW));
+
+    juce::Path envPath;
+    envPath.startNewSubPath (startX, baseY);
+    envPath.lineTo (atkX, topY);
+    envPath.lineTo (decX, susY);
+    envPath.lineTo (susEndX, susY);
+    envPath.lineTo (relX, baseY);
+
+    // Halbtransparente Flächenfüllung unter der Kurve
+    juce::Path fillPath (envPath);
+    fillPath.lineTo (startX, baseY);
+    fillPath.closeSubPath();
+
+    juce::ColourGradient fillGrad (accentColour.withAlpha (0.24f), startX, topY,
+                                   accentColour.withAlpha (0.02f), startX, baseY, false);
+    g.setGradientFill (fillGrad);
+    g.fillPath (fillPath);
+
+    // Glow + Hauptlinie
+    g.setColour (accentColour.withAlpha (0.30f));
+    g.strokePath (envPath, juce::PathStrokeType (3.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour (accentColour);
+    g.strokePath (envPath, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    // Knotenpunkte (Attack-Peak, Sustain-Start, Sustain-Ende)
+    auto drawNode = [&g, accentColour] (float nx, float ny)
+    {
+        g.setColour (juce::Colour::fromRGB (10, 15, 24));
+        g.fillEllipse (nx - 3.5f, ny - 3.5f, 7.0f, 7.0f);
+        g.setColour (accentColour);
+        g.drawEllipse (nx - 3.5f, ny - 3.5f, 7.0f, 7.0f, 1.5f);
+    };
+    drawNode (atkX, topY);
+    drawNode (decX, susY);
+    drawNode (susEndX, susY);
+
+    // 4. Regler-Labels unter den 4 ADSR-Knobs
+    auto drawKnobLabel = [&g] (const juce::Slider& knob, const juce::String& text)
+    {
+        const auto kb = knob.getBounds().toFloat();
+        auto labelRect = juce::Rectangle<float> (kb.getX() - 8.0f, kb.getBottom() - 2.0f, kb.getWidth() + 16.0f, 15.0f);
+        g.setColour (juce::Colour::fromRGB (170, 200, 225));
+        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+        g.drawText (text, labelRect, juce::Justification::centred);
+    };
+
+    drawKnobLabel (env.attackKnob,  "ATTACK");
+    drawKnobLabel (env.decayKnob,   "DECAY");
+    drawKnobLabel (env.sustainKnob, "SUSTAIN");
+    drawKnobLabel (env.releaseKnob, "RELEASE");
+}
+
 void NeomorphX1AudioProcessorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (juce::Colour::fromRGB (10, 14, 22));
@@ -853,7 +1057,7 @@ void NeomorphX1AudioProcessorEditor::paint (juce::Graphics& g)
     // 4. Status-LEDs über den 4 oberen Scene-Buttons zeichnen
     drawSceneLeds (g, w, h);
 
-    // 5. Dynamische Tab-Grafiken (Oscillator-Sektionen & Live-Scopes)
+    // 5. Dynamische Tab-Grafiken (Oscillators & Envelopes)
     if (currentTab == ActiveTab::Oscillators)
     {
         drawOscillatorSection (g,
@@ -865,6 +1069,18 @@ void NeomorphX1AudioProcessorEditor::paint (juce::Graphics& g)
                                juce::Rectangle<float> (0.5662f * w, 0.2673f * h, 0.2380f * w, 0.2700f * h),
                                1,
                                juce::Colour::fromRGB (255, 60, 180));
+    }
+    else if (currentTab == ActiveTab::Envelopes)
+    {
+        drawEnvelopeSection (g,
+                             juce::Rectangle<float> (0.3181f * w, 0.2673f * h, 0.2380f * w, 0.2700f * h),
+                             0,
+                             juce::Colour::fromRGB (0, 240, 255));
+
+        drawEnvelopeSection (g,
+                             juce::Rectangle<float> (0.5662f * w, 0.2673f * h, 0.2380f * w, 0.2700f * h),
+                             1,
+                             juce::Colour::fromRGB (255, 60, 180));
     }
 }
 
@@ -1043,6 +1259,32 @@ void NeomorphX1AudioProcessorEditor::resized()
         placeKnob (osc.phaseKnob,    1, row2Y);
         placeKnob (osc.panKnob,      2, row2Y);
         placeKnob (osc.levelKnob,    3, row2Y);
+    }
+
+    // 9. Tab 3: Envelopes Layout (4 ADSR-Knobs im unteren Drittel jedes Panels)
+    const float envKnobSize = 0.042f * w;
+    const float envKnobY    = panelY + 0.202f * h;
+
+    for (size_t i = 0; i < envControls.size(); ++i)
+    {
+        auto& env = envControls[i];
+        const float px = oscPanelX[i] * w;
+
+        auto placeEnvKnob = [px, panelW, envKnobSize, envKnobY] (juce::Slider& k, int col)
+        {
+            const float cx = px + panelW * (0.14f + static_cast<float> (col) * 0.24f);
+            k.setBounds (
+                juce::roundToInt (cx - envKnobSize * 0.5f),
+                juce::roundToInt (envKnobY - envKnobSize * 0.5f),
+                juce::roundToInt (envKnobSize),
+                juce::roundToInt (envKnobSize)
+            );
+        };
+
+        placeEnvKnob (env.attackKnob,  0);
+        placeEnvKnob (env.decayKnob,   1);
+        placeEnvKnob (env.sustainKnob, 2);
+        placeEnvKnob (env.releaseKnob, 3);
     }
 }
 

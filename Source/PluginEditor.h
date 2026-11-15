@@ -78,6 +78,19 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   levelAttachment;
     };
 
+    struct EnvelopeControls
+    {
+        juce::Slider attackKnob;
+        juce::Slider decayKnob;
+        juce::Slider sustainKnob;
+        juce::Slider releaseKnob;
+
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attackAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> decayAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> sustainAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> releaseAttachment;
+    };
+
     void timerCallback() override;
     void triggerLcdNotification (const juce::String& title, const juce::String& value);
 
@@ -85,6 +98,7 @@ private:
     void setEditingScene (int newScene);
     void handleSceneButton (int buttonIndex);
     void bindOscillatorAttachments();
+    void bindEnvelopeAttachments();
     void updateTabVisibility();
     void showSettingsMenu();
 
@@ -92,6 +106,8 @@ private:
     void drawSceneLeds (juce::Graphics& g, float w, float h);
     void drawOscillatorSection (juce::Graphics& g, juce::Rectangle<float> panelBounds,
                                 int oscIndex, juce::Colour accentColour);
+    void drawEnvelopeSection (juce::Graphics& g, juce::Rectangle<float> panelBounds,
+                              int envIndex, juce::Colour accentColour);
 
     NeomorphX1AudioProcessor& audioProcessor;
     CyberpunkLookAndFeel cyberpunkLookAndFeel;
@@ -127,6 +143,9 @@ private:
 
     // Tab 1: Oscillators (links OSC 1, rechts OSC 2)
     std::array<OscillatorControls, 2> oscControls;
+
+    // Tab 3: Envelopes (links Amp EG, rechts Filter/Mod EG)
+    std::array<EnvelopeControls, 2> envControls;
 
     ActiveTab currentTab = ActiveTab::Oscillators;
 
