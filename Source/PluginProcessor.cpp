@@ -1,3 +1,4 @@
+#include <array>
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
@@ -26,7 +27,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-	// 1. 10 Matrix-Drehregler (rechts)
+    // 1. 10 Matrix-Drehregler (rechts)
     const juce::StringArray knobNames = {
         "Assign 1", "Assign 2",
         "Assign 3", "Assign 4",
@@ -35,7 +36,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
         "Assign 9", "Assign 10"
     };
 
-    // Individuelle Standardwerte für jeden der 10 Regler (0.0f bis 1.0f)
     constexpr std::array<float, 10> knobDefaults = {
         0.8f, 0.5f,   // Reihe 1 (Assign 1 & 2)
         0.0f, 0.0f,   // Reihe 2 (Assign 3 & 4)
@@ -76,55 +76,157 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "mod_wheel", 1 }, "Mod Wheel",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f));
-		
-	// 4. Oscillators Tab (OSC 1 & OSC 2 - Wavetable / Morph Architecture)
+
+    // 4. Dual-Scene Oscillators Tab (s1_ & s2_ für SCENE 1 und SCENE 2)
     const juce::StringArray waveforms = {
         "Basic Analog", "PWM / Pulse", "Formant", "Digital Fold", "SuperSaw", "Vocal Morph"
     };
 
-    for (int osc = 1; osc <= 2; ++osc)
+    for (int scene = 1; scene <= 2; ++scene)
     {
-        const auto prefix = "osc" + juce::String (osc) + "_";
-        const auto label  = "Osc " + juce::String (osc) + " ";
+        const auto scenePrefix = "s" + juce::String (scene) + "_";
+        const auto sceneLabel  = "S" + juce::String (scene) + " ";
 
-        params.push_back (std::make_unique<juce::AudioParameterChoice> (
-            juce::ParameterID { prefix + "wave", 1 }, label + "Wavetable",
-            waveforms, osc == 1 ? 0 : 1));
+        for (int osc = 1; osc <= 2; ++osc)
+        {
+            const auto prefix = scenePrefix + "osc" + juce::String (osc) + "_";
+            const auto label  = sceneLabel + "Osc " + juce::String (osc) + " ";
 
-        params.push_back (std::make_unique<juce::AudioParameterInt> (
-            juce::ParameterID { prefix + "octave", 1 }, label + "Octave",
-            -2, 2, 0));
+            int defaultWave = 0;
+            if (scene == 1)
+                defaultWave = (osc == 1) ? 0 : 1; // Scene 1: Basic Analog + PWM
+            else
+                defaultWave = (osc == 1) ? 2 : 5; // Scene 2: Formant + Vocal Morph
 
-        params.push_back (std::make_unique<juce::AudioParameterInt> (
-            juce::ParameterID { prefix + "semi", 1 }, label + "Semitone",
-            -12, 12, 0));
+            params.push_back (std::make_unique<juce::AudioParameterChoice> (
+                juce::ParameterID { prefix + "wave", 1 }, label + "Wavetable",
+                waveforms, defaultWave));
 
-        params.push_back (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { prefix + "detune", 1 }, label + "Detune",
-            juce::NormalisableRange<float> (-50.0f, 50.0f, 0.1f), 0.0f));
+            params.push_back (std::make_unique<juce::AudioParameterInt> (
+                juce::ParameterID { prefix + "octave", 1 }, label + "Octave",
+                -2, 2, (scene == 2 && osc == 1) ? 1 : 0));
 
-        params.push_back (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { prefix + "position", 1 }, label + "Position",
-            juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.25f));
+            params.push_back (std::make_unique<juce::AudioParameterInt> (
+                juce::ParameterID { prefix + "semi", 1 }, label + "Semitone",
+                -12, 12, 0));
 
-        params.push_back (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { prefix + "morph", 1 }, label + "Morph",
-            juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f));
+            params.push_back (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { prefix + "detune", 1 }, label + "Detune",
+                juce::NormalisableRange<float> (-50.0f, 50.0f, 0.1f),
+                (osc == 2) ? 7.0f : 0.0f));
 
-        params.push_back (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { prefix + "phase", 1 }, label + "Phase",
-            juce::NormalisableRange<float> (0.0f, 360.0f, 1.0f), 0.0f));
+            params.push_back (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { prefix + "position", 1 }, label + "Position",
+                juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
+                (scene == 1) ? 0.25f : 0.65f));
 
-        params.push_back (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { prefix + "pan", 1 }, label + "Pan",
-            juce::NormalisableRange<float> (-1.0f, 1.0f, 0.01f), 0.0f));
+            params.push_back (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { prefix + "morph", 1 }, label + "Morph",
+                juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f));
 
-        params.push_back (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { prefix + "level", 1 }, label + "Level",
-            juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), osc == 1 ? 0.85f : 0.65f));
+            params.push_back (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { prefix + "phase", 1 }, label + "Phase",
+                juce::NormalisableRange<float> (0.0f, 360.0f, 1.0f), 0.0f));
+
+            params.push_back (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { prefix + "pan", 1 }, label + "Pan",
+                juce::NormalisableRange<float> (-1.0f, 1.0f, 0.01f), 0.0f));
+
+            params.push_back (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { prefix + "level", 1 }, label + "Level",
+                juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
+                osc == 1 ? 0.85f : 0.65f));
+        }
     }
 
     return { params.begin(), params.end() };
+}
+
+void NeomorphX1AudioProcessor::copySceneParameters (int sourceScene, int targetScene)
+{
+    if (sourceScene == targetScene)
+        return;
+
+    const auto srcPrefix = "s" + juce::String (sourceScene) + "_";
+    const auto dstPrefix = "s" + juce::String (targetScene) + "_";
+
+    for (auto* param : getParameters())
+    {
+        if (auto* rangedParam = dynamic_cast<juce::RangedAudioParameter*> (param))
+        {
+            const auto id = rangedParam->getParameterID();
+            if (id.startsWith (srcPrefix))
+            {
+                const auto targetID = dstPrefix + id.substring (srcPrefix.length());
+                if (auto* targetParam = apvts.getParameter (targetID))
+                    targetParam->setValueNotifyingHost (rangedParam->getValue());
+            }
+        }
+    }
+}
+
+void NeomorphX1AudioProcessor::swapSceneParameters()
+{
+    const juce::String s1Prefix = "s1_";
+    const juce::String s2Prefix = "s2_";
+
+    for (auto* param : getParameters())
+    {
+        if (auto* p1 = dynamic_cast<juce::RangedAudioParameter*> (param))
+        {
+            const auto id = p1->getParameterID();
+            if (id.startsWith (s1Prefix))
+            {
+                const auto targetID = s2Prefix + id.substring (s1Prefix.length());
+                if (auto* p2 = apvts.getParameter (targetID))
+                {
+                    const float val1 = p1->getValue();
+                    const float val2 = p2->getValue();
+                    p1->setValueNotifyingHost (val2);
+                    p2->setValueNotifyingHost (val1);
+                }
+            }
+        }
+    }
+}
+
+void NeomorphX1AudioProcessor::resetSceneParameters (int scene)
+{
+    const auto prefix = "s" + juce::String (scene) + "_";
+
+    for (auto* param : getParameters())
+    {
+        if (auto* rangedParam = dynamic_cast<juce::RangedAudioParameter*> (param))
+        {
+            if (rangedParam->getParameterID().startsWith (prefix))
+                rangedParam->setValueNotifyingHost (rangedParam->getDefaultValue());
+        }
+    }
+}
+
+void NeomorphX1AudioProcessor::randomizeSceneParameters (int scene)
+{
+    const auto prefix = "s" + juce::String (scene) + "_";
+    auto& rng = juce::Random::getSystemRandom();
+
+    for (auto* param : getParameters())
+    {
+        if (auto* rangedParam = dynamic_cast<juce::RangedAudioParameter*> (param))
+        {
+            const auto id = rangedParam->getParameterID();
+            if (id.startsWith (prefix))
+            {
+                if (id.endsWith ("_level"))
+                    rangedParam->setValueNotifyingHost (rng.nextFloat() * 0.45f + 0.50f);
+                else if (id.endsWith ("_octave"))
+                    rangedParam->setValueNotifyingHost (rangedParam->convertTo0to1 (static_cast<float> (rng.nextInt ({ -1, 2 }))));
+                else if (id.endsWith ("_semi"))
+                    rangedParam->setValueNotifyingHost (0.5f);
+                else
+                    rangedParam->setValueNotifyingHost (rng.nextFloat());
+            }
+        }
+    }
 }
 
 const juce::String NeomorphX1AudioProcessor::getName() const

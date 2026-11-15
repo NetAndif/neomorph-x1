@@ -20,7 +20,8 @@ public:
     }
 };
 
-class NeomorphX1AudioProcessorEditor : public juce::AudioProcessorEditor
+class NeomorphX1AudioProcessorEditor : public juce::AudioProcessorEditor,
+                                       private juce::Timer
 {
 public:
     enum class ActiveTab
@@ -32,6 +33,15 @@ public:
         StepSequencer,
         ModMatrix,
         NumTabs
+    };
+
+    enum class LcdPage
+    {
+        Patch = 0,
+        Morph,
+        Assign,
+        System,
+        NumPages
     };
 
     explicit NeomorphX1AudioProcessorEditor (NeomorphX1AudioProcessor&);
@@ -69,9 +79,18 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   levelAttachment;
     };
 
+    void timerCallback() override;
+    void triggerLcdNotification (const juce::String& title, const juce::String& value);
+
     void setActiveTab (ActiveTab newTab);
+    void setEditingScene (int newScene);
+    void handleSceneButton (int buttonIndex);
+    void bindOscillatorAttachments();
     void updateTabVisibility();
     void showSettingsMenu();
+
+    void drawLcdScreen (juce::Graphics& g, juce::Rectangle<float> lcdBounds);
+    void drawSceneLeds (juce::Graphics& g, float w, float h);
     void drawOscillatorSection (juce::Graphics& g, juce::Rectangle<float> panelBounds,
                                 int oscIndex, juce::Colour accentColour);
 
@@ -82,6 +101,16 @@ private:
     std::array<juce::Image, static_cast<size_t> (ActiveTab::NumTabs)> tabImages;
     std::array<juce::TextButton, static_cast<size_t> (ActiveTab::NumTabs)> tabButtons;
     juce::TextButton settingsButton;
+
+    // 8 unsichtbare Klick-Buttons über den Gehäuse-Buttons rechts neben den Scene-Fadern
+    std::array<juce::TextButton, 8> sceneHardwareButtons;
+    int editingScene  = 1;     // 1 = Scene 1, 2 = Scene 2
+    bool sceneSolo    = false; // Solo für aktive Scene
+    bool sceneLink    = false; // Link-Edit (spiegelt Änderungen auf beide Scenes)
+
+    // 4 unsichtbare Klick-Buttons unter dem LCD-Display
+    std::array<juce::TextButton, 4> lcdPageButtons;
+    LcdPage currentLcdPage = LcdPage::Patch;
 
     // 10 Matrix-Drehregler + APVTS-Attachments
     std::array<juce::Slider, 10> matrixKnobs;
@@ -102,8 +131,10 @@ private:
 
     ActiveTab currentTab = ActiveTab::Oscillators;
 
-    // Status-/Koordinaten-Anzeige unten links
-    juce::String hudStatusText;
+    // Temporäre Parameter-Einblendung im LCD-Display
+    juce::String lcdNotifyTitle;
+    juce::String lcdNotifyValue;
+    bool showLcdNotify = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NeomorphX1AudioProcessorEditor)
 };
