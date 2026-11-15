@@ -40,6 +40,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Assets")
             Assets/tab_free_eg.png
             Assets/tab_step_seq.png
             Assets/tab_mod_matrix.png
+			Assets/Rajdhani-SemiBold.ttf
     )
 	set_target_properties(NeomorphAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
