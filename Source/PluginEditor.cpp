@@ -644,7 +644,7 @@ void NeomorphX1AudioProcessorEditor::drawSceneLeds (juce::Graphics& g, float w, 
 {
     // Die 4 LEDs über den oberen 4 Scene-Buttons
     constexpr float ledX[4] = { 0.4976f, 0.5369f, 0.5762f, 0.6173f };
-    const float ledY        = 0.6250f * h;
+    const float ledY        = 0.6160f * h;
     const float ledRadius   = 0.0042f * w;
 
     const bool ledActive[4] = {
