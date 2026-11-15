@@ -67,7 +67,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> pitchWheelAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> modWheelAttachment;
 
-    ActiveTab currentTab = ActiveTab::Envelopes;
+    ActiveTab currentTab = ActiveTab::Oscillators;
 
     // Status-/Koordinaten-Anzeige unten links
     juce::String hudStatusText;
