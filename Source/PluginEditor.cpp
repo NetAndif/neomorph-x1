@@ -487,7 +487,7 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
 
 void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rectangle<float> lcdBounds)
 {
-    const auto screen = lcdBounds.reduced (6.0f, 5.0f);
+    auto screen = lcdBounds.reduced (6.0f, 5.0f);
     const auto sceneAccent = (editingScene == 1)
                                  ? juce::Colour::fromRGB (0, 240, 255)
                                  : juce::Colour::fromRGB (255, 60, 180);
@@ -606,8 +606,8 @@ void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rec
 
             for (int idx = 0; idx < 10; ++idx)
             {
-                const int row = idx / 5;
-                const int col = idx % 5;
+                const float row = static_cast<float> (idx / 5);
+                const float col = static_cast<float> (idx % 5);
                 auto cell = juce::Rectangle<float> (screen.getX() + col * cellW,
                                                     screen.getY() + row * cellH,
                                                     cellW, cellH);
@@ -634,6 +634,7 @@ void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rec
             break;
         }
 
+        case LcdPage::NumPages:
         default:
             break;
     }
