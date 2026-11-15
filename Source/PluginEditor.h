@@ -78,6 +78,31 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   levelAttachment;
     };
 
+    struct FilterControls
+    {
+        juce::ComboBox typeBox;
+        juce::ComboBox routingBox;
+
+        juce::Slider cutoffKnob;
+        juce::Slider resonanceKnob;
+
+        juce::Slider driveKnob;
+        juce::Slider envAmtKnob;
+        juce::Slider keytrackKnob;
+        juce::Slider velSensKnob;
+
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> typeAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> routingAttachment;
+
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   cutoffAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   resonanceAttachment;
+
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   driveAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   envAmtAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   keytrackAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   velSensAttachment;
+    };
+
     struct EnvelopeControls
     {
         juce::Slider attackKnob;
@@ -98,6 +123,7 @@ private:
     void setEditingScene (int newScene);
     void handleSceneButton (int buttonIndex);
     void bindOscillatorAttachments();
+    void bindFilterAttachments();
     void bindEnvelopeAttachments();
     void updateTabVisibility();
     void showSettingsMenu();
@@ -106,6 +132,8 @@ private:
     void drawSceneLeds (juce::Graphics& g, float w, float h);
     void drawOscillatorSection (juce::Graphics& g, juce::Rectangle<float> panelBounds,
                                 int oscIndex, juce::Colour accentColour);
+    void drawFilterPanels (juce::Graphics& g, juce::Rectangle<float> leftBounds,
+                           juce::Rectangle<float> rightBounds);
     void drawEnvelopeSection (juce::Graphics& g, juce::Rectangle<float> panelBounds,
                               int envIndex, juce::Colour accentColour);
 
@@ -143,6 +171,9 @@ private:
 
     // Tab 1: Oscillators (links OSC 1, rechts OSC 2)
     std::array<OscillatorControls, 2> oscControls;
+
+    // Tab 2: Filter
+    FilterControls filterControls;
 
     // Tab 3: Envelopes (links Amp EG, rechts Filter/Mod EG)
     std::array<EnvelopeControls, 2> envControls;
