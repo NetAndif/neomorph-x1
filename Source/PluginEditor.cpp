@@ -34,14 +34,19 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
     settingsButton.onClick = [this] { showSettingsMenu(); };
     addAndMakeVisible (settingsButton);
 
-    // 10 Matrix-Drehregler konfigurieren & an APVTS binden
+	// 10 Matrix-Drehregler konfigurieren & an APVTS binden
     for (size_t i = 0; i < matrixKnobs.size(); ++i)
     {
         auto& knob = matrixKnobs[i];
         knob.setSliderStyle (juce::Slider::RotaryVerticalDrag);
         knob.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         knob.setColour (juce::Slider::rotarySliderFillColourId, juce::Colour::fromRGB (0, 240, 255));
-        knob.setDoubleClickReturnValue (true, 0.5);
+
+        const auto paramID = "knob_" + juce::String (static_cast<int> (i + 1));
+
+        // Holt automatisch den im PluginProcessor definierten Default-Wert
+        if (auto* param = audioProcessor.apvts.getParameter (paramID))
+            knob.setDoubleClickReturnValue (true, param->getDefaultValue());
 
         knob.onValueChange = [this, i]
         {
@@ -52,7 +57,6 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
 
         addAndMakeVisible (knob);
 
-        const auto paramID = "knob_" + juce::String (static_cast<int> (i + 1));
         knobAttachments[i] = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
             audioProcessor.apvts, paramID, knob);
     }
@@ -66,13 +70,16 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
         juce::Colour::fromRGB (0, 240, 255)
     };
 
-    for (size_t i = 0; i < sceneFaders.size(); ++i)
+	for (size_t i = 0; i < sceneFaders.size(); ++i)
     {
         auto& fader = sceneFaders[i];
         fader.setSliderStyle (juce::Slider::LinearVertical);
         fader.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         fader.setColour (juce::Slider::thumbColourId, faderColours[i]);
-        fader.setDoubleClickReturnValue (true, i == 1 ? 0.5 : 0.5);
+
+        // Holt automatisch den im PluginProcessor definierten Default-Wert
+        if (auto* param = audioProcessor.apvts.getParameter (faderParamIDs[i]))
+            fader.setDoubleClickReturnValue (true, param->getDefaultValue());
 
         const juce::String label (faderLabels[i]);
         fader.onValueChange = [this, i, label]

@@ -26,13 +26,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    // 1. 10 Matrix-Drehregler (rechts)
+	// 1. 10 Matrix-Drehregler (rechts)
     const juce::StringArray knobNames = {
         "Assign 1", "Assign 2",
         "Assign 3", "Assign 4",
         "Assign 5", "Assign 6",
         "Assign 7", "Assign 8",
         "Assign 9", "Assign 10"
+    };
+
+    // Individuelle Standardwerte für jeden der 10 Regler (0.0f bis 1.0f)
+    constexpr std::array<float, 10> knobDefaults = {
+        0.8f, 0.5f,   // Reihe 1 (Assign 1 & 2)
+        0.0f, 0.0f,   // Reihe 2 (Assign 3 & 4)
+        0.0f, 0.0f,   // Reihe 3 (Assign 5 & 6)
+        0.0f, 0.0f,   // Reihe 4 (Assign 7 & 8)
+        0.0f, 0.0f    // Reihe 5 (Assign 9 & 10)
     };
 
     for (int i = 0; i < 10; ++i)
@@ -42,14 +51,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
             juce::ParameterID { paramID, 1 },
             knobNames[i],
             juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f),
-            0.5f
+            knobDefaults[static_cast<size_t> (i)]
         ));
     }
 
     // 2. 3 Scene-Fader (unten links/mitte)
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "scene_1", 1 }, "Scene 1",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.5f));
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.8f));
 
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "scene_morph", 1 }, "Scene Morph",
@@ -57,7 +66,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
 
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "scene_2", 1 }, "Scene 2",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.5f));
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.8f));
 
     // 3. Pitch- & Mod-Wheel (unten links)
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
