@@ -709,21 +709,32 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
             case 12: setSize (1400, 788);  break;
             case 13: setSize (1680, 945);  break;
 			case 20:	
-                if (auto* topLevel = getTopLevelComponent())
+				if (auto* topLevel = getTopLevelComponent())
                 {
-                    if (auto* docWin = dynamic_cast<juce::DocumentWindow*> (topLevel))
+                    std::function<bool (juce::Component*)> clickOptionsButton = [&] (juce::Component* comp) -> bool
                     {
-                        if (auto* content = docWin->getContentComponent())
-                            content->postCommandMessage (1000);
-                    }
-                    else
-                    {
-                        topLevel->postCommandMessage (1000);
-                    }
+                        if (auto* btn = dynamic_cast<juce::TextButton*> (comp))
+                        {
+                            if (btn->getButtonText().containsIgnoreCase ("Options"))
+                            {
+                                btn->triggerClick();
+                                return true;
+                            }
+                        }
+
+                        for (int i = 0; i < comp->getNumChildComponents(); ++i)
+                        {
+                            if (clickOptionsButton (comp->getChildComponent (i)))
+                                return true;
+                        }
+                        return false;
+                    };
+
+                    clickOptionsButton (topLevel);
                 }
                 break;
 			default:
-            break;
+				break;
         }
     });
 }
