@@ -51,6 +51,25 @@ public:
     void mouseDown (const juce::MouseEvent& event) override;
 
 private:
+    class FreeEgCanvas : public juce::Component
+    {
+    public:
+        FreeEgCanvas (NeomorphX1AudioProcessorEditor& ownerEditor);
+        void paint (juce::Graphics& g) override;
+        void mouseDown (const juce::MouseEvent& e) override;
+        void mouseDrag (const juce::MouseEvent& e) override;
+        void mouseUp (const juce::MouseEvent& e) override;
+        void mouseMove (const juce::MouseEvent& e) override;
+
+    private:
+        juce::Point<float> getPointPosition (int idx, juce::Rectangle<float> inner) const;
+        int findPointAt (juce::Point<float> pos, juce::Rectangle<float> inner) const;
+
+        NeomorphX1AudioProcessorEditor& owner;
+        int draggedPoint = -1;
+        int hoveredPoint = -1;
+    };
+
     struct OscillatorControls
     {
         juce::ComboBox waveBox;
@@ -116,6 +135,29 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> releaseAttachment;
     };
 
+    struct FreeEgControls
+    {
+        FreeEgCanvas canvas;
+
+        juce::ComboBox targetBox;
+        juce::ComboBox modeBox;
+        juce::ComboBox syncBox;
+
+        juce::Slider timeKnob;
+        juce::Slider amountKnob;
+        juce::Slider smoothKnob;
+
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> targetAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> modeAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> syncAttachment;
+
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   timeAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   amountAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   smoothAttachment;
+
+        explicit FreeEgControls (NeomorphX1AudioProcessorEditor& owner) : canvas (owner) {}
+    };
+
     void timerCallback() override;
     void triggerLcdNotification (const juce::String& title, const juce::String& value);
 
@@ -125,6 +167,7 @@ private:
     void bindOscillatorAttachments();
     void bindFilterAttachments();
     void bindEnvelopeAttachments();
+    void bindFreeEgAttachments();
     void updateTabVisibility();
     void showSettingsMenu();
 
@@ -136,6 +179,8 @@ private:
                            juce::Rectangle<float> rightBounds);
     void drawEnvelopeSection (juce::Graphics& g, juce::Rectangle<float> panelBounds,
                               int envIndex, juce::Colour accentColour);
+    void drawFreeEgPanels (juce::Graphics& g, juce::Rectangle<float> leftBounds,
+                           juce::Rectangle<float> rightBounds);
 
     NeomorphX1AudioProcessor& audioProcessor;
     CyberpunkLookAndFeel cyberpunkLookAndFeel;
@@ -177,6 +222,9 @@ private:
 
     // Tab 3: Envelopes (links Amp EG, rechts Filter/Mod EG)
     std::array<EnvelopeControls, 2> envControls;
+
+    // Tab 4: Free EG
+    FreeEgControls freeEgControls { *this };
 
     ActiveTab currentTab = ActiveTab::Oscillators;
 

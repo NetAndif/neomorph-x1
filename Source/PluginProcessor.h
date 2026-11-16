@@ -75,11 +75,24 @@ public:
         std::atomic<float>* release = nullptr;
     };
 
+    struct FreeEgParamPointers
+    {
+        std::atomic<float>* target = nullptr;
+        std::atomic<float>* mode   = nullptr;
+        std::atomic<float>* sync   = nullptr;
+        std::atomic<float>* time   = nullptr;
+        std::atomic<float>* amount = nullptr;
+        std::atomic<float>* smooth = nullptr;
+        std::array<std::atomic<float>*, 6> ptTime  {};
+        std::array<std::atomic<float>*, 6> ptLevel {};
+    };
+
     struct SceneParamPointers
     {
         std::array<OscParamPointers, 2> oscs;
         FilterParamPointers filter;
         std::array<EnvParamPointers, 2> envs; // 0 = Amp EG, 1 = Filter/Mod EG
+        FreeEgParamPointers freeEg;
     };
 
     struct EngineParamCache
@@ -91,6 +104,7 @@ public:
         std::atomic<float>* pitchWheel  = nullptr;
         std::atomic<float>* modWheel    = nullptr;
         std::array<std::atomic<float>*, 10> matrixKnobs {};
+        std::atomic<float> currentBpm { 120.0f };
     };
 
     juce::AudioProcessorValueTreeState apvts;
