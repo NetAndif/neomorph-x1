@@ -1,11 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-#if __has_include(<juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>)
- #include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
- #define NEOMORPH_HAS_STANDALONE_HOLDER 1
-#endif
-
 NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
@@ -713,15 +708,22 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
             case 11: setSize (1120, 630);  break;
             case 12: setSize (1400, 788);  break;
             case 13: setSize (1680, 945);  break;
-            case 20:
-			case 20:
-               #if NEOMORPH_HAS_STANDALONE_HOLDER
-                if (auto* holder = juce::StandalonePluginHolder::getInstance())
-                    holder->showAudioSettingsDialog();
-               #endif
+			case 20:	
+                if (auto* topLevel = getTopLevelComponent())
+                {
+                    if (auto* docWin = dynamic_cast<juce::DocumentWindow*> (topLevel))
+                    {
+                        if (auto* content = docWin->getContentComponent())
+                            content->postCommandMessage (1000);
+                    }
+                    else
+                    {
+                        topLevel->postCommandMessage (1000);
+                    }
+                }
                 break;
-            default:
-                break;
+			default:
+            break;
         }
     });
 }
