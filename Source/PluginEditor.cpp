@@ -679,7 +679,7 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
     if (audioProcessor.wrapperType == juce::AudioProcessor::wrapperType_Standalone)
     {
         menu.addSeparator();
-        menu.addItem (20, "Audio / MIDI Settings...");
+        menu.addItem (20, "Standalone Options...");
     }
 
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&settingsButton),
