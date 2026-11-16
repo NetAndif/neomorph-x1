@@ -55,7 +55,6 @@ void NeomorphX1AudioProcessorEditor::FreeEgCanvas::mouseDown (const juce::MouseE
 {
     const auto inner = getLocalBounds().toFloat().reduced (8.0f, 8.0f);
 
-    // Rechtsklick setzt die 6 Stützpunkte der aktiven Scene auf Default zurück
     if (e.mods.isRightButtonDown())
     {
         for (int i = 0; i < 6; ++i)
@@ -140,7 +139,6 @@ void NeomorphX1AudioProcessorEditor::FreeEgCanvas::paint (juce::Graphics& g)
 
     const auto inner = bounds.reduced (8.0f, 8.0f);
 
-    // Bipolare Nulllinie & Zeit-Raster
     g.setColour (cyan.withAlpha (0.14f));
     g.drawHorizontalLine (juce::roundToInt (inner.getCentreY()), inner.getX(), inner.getRight());
     for (int col = 1; col < 4; ++col)
@@ -153,7 +151,6 @@ void NeomorphX1AudioProcessorEditor::FreeEgCanvas::paint (juce::Graphics& g)
     for (int i = 0; i < 6; ++i)
         pts[static_cast<size_t> (i)] = getPointPosition (i, inner);
 
-    // Vertikaler Sustain/Loop-Marker bei Punkt 5 (Index 4)
     g.setColour (pink.withAlpha (0.45f));
     g.drawVerticalLine (juce::roundToInt (pts[4].x), inner.getY(), inner.getBottom());
 
@@ -162,7 +159,6 @@ void NeomorphX1AudioProcessorEditor::FreeEgCanvas::paint (juce::Graphics& g)
     for (size_t i = 1; i < 6; ++i)
         curvePath.lineTo (pts[i]);
 
-    // Flächenfüllung zur Nulllinie
     juce::Path fillPath (curvePath);
     fillPath.lineTo (pts[5].x, inner.getCentreY());
     fillPath.lineTo (pts[0].x, inner.getCentreY());
@@ -176,7 +172,6 @@ void NeomorphX1AudioProcessorEditor::FreeEgCanvas::paint (juce::Graphics& g)
     g.setColour (cyan);
     g.strokePath (curvePath, juce::PathStrokeType (1.7f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
-    // Stützpunkte zeichnen
     for (int i = 0; i < 6; ++i)
     {
         const auto p       = pts[static_cast<size_t> (i)];
@@ -194,6 +189,158 @@ void NeomorphX1AudioProcessorEditor::FreeEgCanvas::paint (juce::Graphics& g)
         g.fillEllipse (p.x - radius, p.y - radius, radius * 2.0f, radius * 2.0f);
         g.setColour (ptCol);
         g.drawEllipse (p.x - radius, p.y - radius, radius * 2.0f, radius * 2.0f, 1.5f);
+    }
+}
+
+// ==============================================================================
+// Interaktives 16-Step-Canvas für Tab 5 (Step Sequencer)
+// ==============================================================================
+NeomorphX1AudioProcessorEditor::StepSeqCanvas::StepSeqCanvas (NeomorphX1AudioProcessorEditor& ownerEditor)
+    : owner (ownerEditor)
+{
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+}
+
+void NeomorphX1AudioProcessorEditor::StepSeqCanvas::mouseDown (const juce::MouseEvent& e)
+{
+    lastEditedStep = -1;
+    applyMouseEdit (e, e.mods.isRightButtonDown());
+}
+
+void NeomorphX1AudioProcessorEditor::StepSeqCanvas::mouseDrag (const juce::MouseEvent& e)
+{
+    if (! e.mods.isRightButtonDown())
+        applyMouseEdit (e, false);
+}
+
+void NeomorphX1AudioProcessorEditor::StepSeqCanvas::applyMouseEdit (const juce::MouseEvent& e, bool toggleGateOnly)
+{
+    const auto inner = getLocalBounds().toFloat().reduced (6.0f, 6.0f);
+    const float colW = inner.getWidth() / 16.0f;
+
+    const int stepIdx = juce::jlimit (0, 15, static_cast<int> ((e.position.x - inner.getX()) / juce::jmax (1.0f, colW)));
+    const auto stStr  = juce::String (stepIdx + 1);
+
+    if (toggleGateOnly)
+    {
+        if (stepIdx == lastEditedStep)
+            return;
+        lastEditedStep = stepIdx;
+
+        const auto baseGateID = "s" + juce::String (owner.editingScene) + "_seq_st" + stStr + "_g";
+        const bool wasOn      = (owner.audioProcessor.apvts.getRawParameterValue (baseGateID)->load() > 0.5f);
+        const float newGate   = wasOn ? 0.0f : 1.0f;
+
+        for (int sc = 1; sc <= 2; ++sc)
+        {
+            if (! owner.sceneLink && sc != owner.editingScene)
+                continue;
+            if (auto* pg = owner.audioProcessor.apvts.getParameter ("s" + juce::String (sc) + "_seq_st" + stStr + "_g"))
+                pg->setValueNotifyingHost (newGate);
+        }
+
+        owner.triggerLcdNotification (
+            juce::String::formatted ("S%d // STEP %02d GATE", owner.editingScene, stepIdx + 1),
+            wasOn ? "MUTED" : "ACTIVE");
+        repaint();
+        return;
+    }
+
+    const float rawNorm = juce::jlimit (-1.0f, 1.0f, juce::jmap (e.position.y, inner.getBottom(), inner.getY(), -1.0f, 1.0f));
+    const int mode      = owner.stepSeqControls.modeBox.getSelectedItemIndex();
+
+    // Im Pitch-Mode auf exakte Halbtöne (-12..+12) einrasten
+    const float val = (mode == 1) ? (std::round (rawNorm * 12.0f) / 12.0f) : rawNorm;
+
+    for (int sc = 1; sc <= 2; ++sc)
+    {
+        if (! owner.sceneLink && sc != owner.editingScene)
+            continue;
+        if (auto* pv = owner.audioProcessor.apvts.getParameter ("s" + juce::String (sc) + "_seq_st" + stStr + "_v"))
+            pv->setValueNotifyingHost (pv->convertTo0to1 (val));
+    }
+
+    if (mode == 1)
+    {
+        const int semi = juce::roundToInt (val * 12.0f);
+        owner.triggerLcdNotification (
+            juce::String::formatted ("S%d // STEP %02d PITCH", owner.editingScene, stepIdx + 1),
+            juce::String::formatted ("%+d ST", semi));
+    }
+    else
+    {
+        owner.triggerLcdNotification (
+            juce::String::formatted ("S%d // STEP %02d VALUE", owner.editingScene, stepIdx + 1),
+            juce::String::formatted ("%+d%%", juce::roundToInt (val * 100.0f)));
+    }
+
+    repaint();
+}
+
+void NeomorphX1AudioProcessorEditor::StepSeqCanvas::paint (juce::Graphics& g)
+{
+    const auto bounds = getLocalBounds().toFloat();
+    const auto cyan   = juce::Colour::fromRGB (0, 240, 255);
+    const auto pink   = juce::Colour::fromRGB (255, 60, 180);
+
+    g.setColour (juce::Colour::fromRGB (6, 10, 16));
+    g.fillRoundedRectangle (bounds, 4.0f);
+    g.setColour (juce::Colour::fromRGB (35, 55, 75).withAlpha (0.7f));
+    g.drawRoundedRectangle (bounds, 4.0f, 1.0f);
+
+    const auto inner = bounds.reduced (6.0f, 6.0f);
+    const float midY = inner.getCentreY();
+    const float colW = inner.getWidth() / 16.0f;
+
+    constexpr int seqLengths[3] = { 8, 12, 16 };
+    const int activeLen = seqLengths[juce::jlimit (0, 2, owner.stepSeqControls.lengthBox.getSelectedItemIndex())];
+    const int playingStep = owner.audioProcessor.getCurrentSeqStep (owner.editingScene);
+
+    g.setColour (cyan.withAlpha (0.16f));
+    g.drawHorizontalLine (juce::roundToInt (midY), inner.getX(), inner.getRight());
+
+    for (int st = 0; st < 16; ++st)
+    {
+        const auto stStr  = juce::String (st + 1);
+        const auto prefix = "s" + juce::String (owner.editingScene) + "_seq_st" + stStr;
+        const float val   = owner.audioProcessor.apvts.getRawParameterValue (prefix + "_v")->load();
+        const bool gateOn = (owner.audioProcessor.apvts.getRawParameterValue (prefix + "_g")->load() > 0.5f);
+        const bool inRange = (st < activeLen);
+        const bool isCurrent = (st == playingStep && inRange);
+
+        auto cell = juce::Rectangle<float> (inner.getX() + static_cast<float> (st) * colW + 1.5f,
+                                            inner.getY(),
+                                            colW - 3.0f,
+                                            inner.getHeight());
+
+        // 4er-Beat-Gruppierung leicht hervorheben
+        if ((st % 4) == 0 && st > 0)
+        {
+            g.setColour (cyan.withAlpha (0.12f));
+            g.drawVerticalLine (juce::roundToInt (cell.getX() - 1.5f), inner.getY(), inner.getBottom());
+        }
+
+        if (isCurrent)
+        {
+            g.setColour (pink.withAlpha (0.18f));
+            g.fillRoundedRectangle (cell, 2.0f);
+        }
+
+        const auto barCol = ! inRange ? juce::Colour::fromRGB (45, 55, 70).withAlpha (0.35f)
+                          : ! gateOn  ? juce::Colour::fromRGB (70, 90, 110).withAlpha (0.35f)
+                          : isCurrent ? pink
+                                      : cyan;
+
+        const float valY = juce::jmap (val, -1.0f, 1.0f, inner.getBottom(), inner.getY());
+        const float topY = juce::jmin (midY, valY);
+        const float barH = juce::jmax (2.5f, std::abs (valY - midY));
+
+        auto barRect = juce::Rectangle<float> (cell.getX(), topY, cell.getWidth(), barH);
+        g.setColour (barCol.withAlpha (gateOn && inRange ? 0.78f : 0.30f));
+        g.fillRoundedRectangle (barRect, 2.0f);
+
+        g.setColour (barCol);
+        g.drawHorizontalLine (juce::roundToInt (valY), cell.getX(), cell.getRight());
     }
 }
 
@@ -242,7 +389,6 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
         {
             currentLcdPage = static_cast<LcdPage> (i);
             showLcdNotify  = false;
-            stopTimer();
             repaint();
         };
         addAndMakeVisible (btn);
@@ -664,12 +810,103 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
     setupFegKnob (freeEgControls.smoothKnob, "smooth", "SMOOTH", false,
         [] (double v) { return juce::String::formatted ("%d%%", juce::roundToInt (v * 100.0)); });
 
-    // Attachments an die aktive Edit-Scene (Scene 1) binden
+    // --- Tab 5: Step Sequencer Controls ---
+    const juce::StringArray seqModeItems = {
+        "Off", "Pitch (Seq)", "Filter Cutoff", "Osc Position", "Scene Morph"
+    };
+    const juce::StringArray seqLengthItems = {
+        "8 Steps", "12 Steps", "16 Steps"
+    };
+    const juce::StringArray seqRateItems = {
+        "1/4 Note", "1/8 Note", "1/8 Dotted", "1/16 Note", "1/16 Triplet", "1/32 Note"
+    };
+
+    auto mirrorSeqParam = [this] (const juce::String& suffix)
+    {
+        if (! sceneLink)
+            return;
+
+        const int otherScene = (editingScene == 1) ? 2 : 1;
+        const auto srcID = "s" + juce::String (editingScene) + "_seq_" + suffix;
+        const auto dstID = "s" + juce::String (otherScene)   + "_seq_" + suffix;
+        if (auto* srcP = audioProcessor.apvts.getParameter (srcID))
+            if (auto* dstP = audioProcessor.apvts.getParameter (dstID))
+                dstP->setValueNotifyingHost (srcP->getValue());
+    };
+
+    addChildComponent (stepSeqControls.canvas);
+
+    stepSeqControls.modeBox.addItemList (seqModeItems, 1);
+    stepSeqControls.modeBox.setJustificationType (juce::Justification::centredLeft);
+    stepSeqControls.modeBox.onChange = [this, mirrorSeqParam]
+    {
+        mirrorSeqParam ("mode");
+        stepSeqControls.canvas.repaint();
+        triggerLcdNotification ("S" + juce::String (editingScene) + " // SEQ MODE",
+                                stepSeqControls.modeBox.getText());
+    };
+    addChildComponent (stepSeqControls.modeBox);
+
+    stepSeqControls.lengthBox.addItemList (seqLengthItems, 1);
+    stepSeqControls.lengthBox.setJustificationType (juce::Justification::centredLeft);
+    stepSeqControls.lengthBox.onChange = [this, mirrorSeqParam]
+    {
+        mirrorSeqParam ("length");
+        stepSeqControls.canvas.repaint();
+        triggerLcdNotification ("S" + juce::String (editingScene) + " // SEQ LENGTH",
+                                stepSeqControls.lengthBox.getText());
+    };
+    addChildComponent (stepSeqControls.lengthBox);
+
+    stepSeqControls.rateBox.addItemList (seqRateItems, 1);
+    stepSeqControls.rateBox.setJustificationType (juce::Justification::centredLeft);
+    stepSeqControls.rateBox.onChange = [this, mirrorSeqParam]
+    {
+        mirrorSeqParam ("rate");
+        triggerLcdNotification ("S" + juce::String (editingScene) + " // SEQ RATE",
+                                stepSeqControls.rateBox.getText());
+    };
+    addChildComponent (stepSeqControls.rateBox);
+
+    auto setupSeqKnob = [this, mirrorSeqParam, magentaAccent] (juce::Slider& slider,
+                                                               const juce::String& paramSuffix,
+                                                               const juce::String& paramName,
+                                                               std::function<juce::String (double)> formatVal)
+    {
+        slider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
+        slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        slider.setColour (juce::Slider::rotarySliderFillColourId, magentaAccent);
+        slider.getProperties().set ("isBipolar", false);
+
+        slider.onValueChange = [this, &slider, mirrorSeqParam, paramSuffix, paramName, formatVal]
+        {
+            mirrorSeqParam (paramSuffix);
+            triggerLcdNotification ("S" + juce::String (editingScene) + " // SEQ " + paramName,
+                                    formatVal (slider.getValue()));
+        };
+
+        addChildComponent (slider);
+    };
+
+    setupSeqKnob (stepSeqControls.gateKnob, "gate", "GATE",
+        [] (double v) { return juce::String::formatted ("%d%%", juce::roundToInt (v * 100.0)); });
+
+    setupSeqKnob (stepSeqControls.swingKnob, "swing", "SWING",
+        [] (double v) { return juce::String::formatted ("%d%%", juce::roundToInt (v * 100.0)); });
+
+    setupSeqKnob (stepSeqControls.amountKnob, "amount", "GLIDE / AMT",
+        [] (double v) { return juce::String::formatted ("%d%%", juce::roundToInt (v * 100.0)); });
+
+    // Attachments binden
     bindOscillatorAttachments();
     bindFilterAttachments();
     bindEnvelopeAttachments();
     bindFreeEgAttachments();
+    bindStepSeqAttachments();
     updateTabVisibility();
+
+    // 30 Hz UI-Timer für LCD-Auto-Hide & Step-Sequencer-Lauflicht
+    startTimerHz (30);
 
     setResizable (true, true);
     getConstrainer()->setFixedAspectRatio (16.0 / 9.0);
@@ -690,9 +927,29 @@ NeomorphX1AudioProcessorEditor::~NeomorphX1AudioProcessorEditor()
 
 void NeomorphX1AudioProcessorEditor::timerCallback()
 {
-    stopTimer();
-    showLcdNotify = false;
-    repaint();
+    bool needsRepaint = false;
+
+    if (showLcdNotify && lcdNotifyTicks > 0)
+    {
+        if (--lcdNotifyTicks == 0)
+        {
+            showLcdNotify = false;
+            needsRepaint = true;
+        }
+    }
+
+    if (currentTab == ActiveTab::StepSequencer)
+    {
+        const int curStep = audioProcessor.getCurrentSeqStep (editingScene);
+        if (curStep != lastPaintedSeqStep)
+        {
+            lastPaintedSeqStep = curStep;
+            stepSeqControls.canvas.repaint();
+        }
+    }
+
+    if (needsRepaint)
+        repaint();
 }
 
 void NeomorphX1AudioProcessorEditor::triggerLcdNotification (const juce::String& title, const juce::String& value)
@@ -700,7 +957,7 @@ void NeomorphX1AudioProcessorEditor::triggerLcdNotification (const juce::String&
     lcdNotifyTitle = title;
     lcdNotifyValue = value;
     showLcdNotify  = true;
-    startTimer (1600);
+    lcdNotifyTicks = 48; // ~1.6 Sekunden bei 30 Hz
     repaint();
 }
 
@@ -719,7 +976,6 @@ void NeomorphX1AudioProcessorEditor::setEditingScene (int newScene)
     if (editingScene == newScene)
     {
         showLcdNotify = false;
-        stopTimer();
         repaint();
         return;
     }
@@ -729,10 +985,11 @@ void NeomorphX1AudioProcessorEditor::setEditingScene (int newScene)
     bindFilterAttachments();
     bindEnvelopeAttachments();
     bindFreeEgAttachments();
+    bindStepSeqAttachments();
     freeEgControls.canvas.repaint();
+    stepSeqControls.canvas.repaint();
 
     showLcdNotify = false;
-    stopTimer();
     repaint();
 }
 
@@ -758,6 +1015,7 @@ void NeomorphX1AudioProcessorEditor::handleSceneButton (int buttonIndex)
             const int targetScene = (editingScene == 1) ? 2 : 1;
             audioProcessor.copySceneParameters (editingScene, targetScene);
             freeEgControls.canvas.repaint();
+            stepSeqControls.canvas.repaint();
             triggerLcdNotification ("SCENE COPY",
                                     juce::String::formatted ("S%d -> S%d DONE", editingScene, targetScene));
             break;
@@ -766,18 +1024,21 @@ void NeomorphX1AudioProcessorEditor::handleSceneButton (int buttonIndex)
         case 5:
             audioProcessor.swapSceneParameters();
             freeEgControls.canvas.repaint();
+            stepSeqControls.canvas.repaint();
             triggerLcdNotification ("SCENE SWAP", "S1 <-> S2 SWAPPED");
             break;
 
         case 6:
             audioProcessor.resetSceneParameters (editingScene);
             freeEgControls.canvas.repaint();
+            stepSeqControls.canvas.repaint();
             triggerLcdNotification ("SCENE INIT", "SCENE " + juce::String (editingScene) + " RESET");
             break;
 
         case 7:
             audioProcessor.randomizeSceneParameters (editingScene);
             freeEgControls.canvas.repaint();
+            stepSeqControls.canvas.repaint();
             triggerLcdNotification ("SCENE RANDOM", "SCENE " + juce::String (editingScene) + " MORPHED");
             break;
 
@@ -936,6 +1197,42 @@ void NeomorphX1AudioProcessorEditor::bindFreeEgAttachments()
     bindSlider (freeEgControls.smoothKnob, freeEgControls.smoothAttachment, prefix + "smooth");
 }
 
+void NeomorphX1AudioProcessorEditor::bindStepSeqAttachments()
+{
+    const auto prefix = "s" + juce::String (editingScene) + "_seq_";
+
+    stepSeqControls.modeAttachment.reset();
+    stepSeqControls.lengthAttachment.reset();
+    stepSeqControls.rateAttachment.reset();
+    stepSeqControls.gateAttachment.reset();
+    stepSeqControls.swingAttachment.reset();
+    stepSeqControls.amountAttachment.reset();
+
+    auto bindSlider = [this] (juce::Slider& slider,
+                              std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>& attachment,
+                              const juce::String& paramID)
+    {
+        if (auto* param = audioProcessor.apvts.getParameter (paramID))
+            slider.setDoubleClickReturnValue (true, param->getDefaultValue());
+
+        attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+            audioProcessor.apvts, paramID, slider);
+    };
+
+    stepSeqControls.modeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+        audioProcessor.apvts, prefix + "mode", stepSeqControls.modeBox);
+
+    stepSeqControls.lengthAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+        audioProcessor.apvts, prefix + "length", stepSeqControls.lengthBox);
+
+    stepSeqControls.rateAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+        audioProcessor.apvts, prefix + "rate", stepSeqControls.rateBox);
+
+    bindSlider (stepSeqControls.gateKnob,   stepSeqControls.gateAttachment,   prefix + "gate");
+    bindSlider (stepSeqControls.swingKnob,  stepSeqControls.swingAttachment,  prefix + "swing");
+    bindSlider (stepSeqControls.amountKnob, stepSeqControls.amountAttachment, prefix + "amount");
+}
+
 void NeomorphX1AudioProcessorEditor::updateTabVisibility()
 {
     const bool showOsc = (currentTab == ActiveTab::Oscillators);
@@ -979,6 +1276,15 @@ void NeomorphX1AudioProcessorEditor::updateTabVisibility()
     freeEgControls.timeKnob.setVisible (showFeg);
     freeEgControls.amountKnob.setVisible (showFeg);
     freeEgControls.smoothKnob.setVisible (showFeg);
+
+    const bool showSeq = (currentTab == ActiveTab::StepSequencer);
+    stepSeqControls.canvas.setVisible (showSeq);
+    stepSeqControls.modeBox.setVisible (showSeq);
+    stepSeqControls.lengthBox.setVisible (showSeq);
+    stepSeqControls.rateBox.setVisible (showSeq);
+    stepSeqControls.gateKnob.setVisible (showSeq);
+    stepSeqControls.swingKnob.setVisible (showSeq);
+    stepSeqControls.amountKnob.setVisible (showSeq);
 }
 
 void NeomorphX1AudioProcessorEditor::showSettingsMenu()
@@ -1015,21 +1321,25 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
                 for (auto* param : audioProcessor.getParameters())
                     param->setValueNotifyingHost (param->getDefaultValue());
                 freeEgControls.canvas.repaint();
+                stepSeqControls.canvas.repaint();
                 triggerLcdNotification ("SYSTEM", "INIT PATCH LOADED");
                 break;
             case 2:
                 audioProcessor.copySceneParameters (1, 2);
                 freeEgControls.canvas.repaint();
+                stepSeqControls.canvas.repaint();
                 triggerLcdNotification ("SCENE COPY", "S1 -> S2 DONE");
                 break;
             case 3:
                 audioProcessor.copySceneParameters (2, 1);
                 freeEgControls.canvas.repaint();
+                stepSeqControls.canvas.repaint();
                 triggerLcdNotification ("SCENE COPY", "S2 -> S1 DONE");
                 break;
             case 4:
                 audioProcessor.swapSceneParameters();
                 freeEgControls.canvas.repaint();
+                stepSeqControls.canvas.repaint();
                 triggerLcdNotification ("SCENE SWAP", "S1 <-> S2 SWAPPED");
                 break;
             case 10: setSize (896, 504);   break;
@@ -1215,7 +1525,7 @@ void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rec
 void NeomorphX1AudioProcessorEditor::drawSceneLeds (juce::Graphics& g, float w, float h)
 {
     constexpr float ledX[4] = { 0.4976f, 0.5369f, 0.5762f, 0.6173f };
-    const float ledY        = 0.6130f * h;
+    const float ledY        = 0.6135f * h;
     const float ledRadius   = 0.0042f * w;
 
     const bool ledActive[4] = {
@@ -1614,7 +1924,6 @@ void NeomorphX1AudioProcessorEditor::drawFreeEgPanels (juce::Graphics& g,
     const auto cyanAccent    = juce::Colour::fromRGB (0, 240, 255);
     const auto magentaAccent = juce::Colour::fromRGB (255, 60, 180);
 
-    // Linkes Panel: Free EG Curve Editor
     g.setColour (juce::Colour::fromRGB (10, 15, 24).withAlpha (0.74f));
     g.fillRoundedRectangle (leftBounds, 6.0f);
     g.setColour (cyanAccent.withAlpha (0.38f));
@@ -1635,7 +1944,6 @@ void NeomorphX1AudioProcessorEditor::drawFreeEgPanels (juce::Graphics& g,
     g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
     g.drawText ("TARGET:", targetLabelRect, juce::Justification::centredLeft);
 
-    // Rechtes Panel: Timing, Loop & Amount
     g.setColour (juce::Colour::fromRGB (10, 15, 24).withAlpha (0.74f));
     g.fillRoundedRectangle (rightBounds, 6.0f);
     g.setColour (magentaAccent.withAlpha (0.38f));
@@ -1659,6 +1967,60 @@ void NeomorphX1AudioProcessorEditor::drawFreeEgPanels (juce::Graphics& g,
     drawKnobLabel (freeEgControls.timeKnob,   "TIME");
     drawKnobLabel (freeEgControls.amountKnob, "AMOUNT");
     drawKnobLabel (freeEgControls.smoothKnob, "SMOOTH");
+}
+
+void NeomorphX1AudioProcessorEditor::drawStepSeqPanels (juce::Graphics& g,
+                                                        juce::Rectangle<float> leftBounds,
+                                                        juce::Rectangle<float> rightBounds)
+{
+    const auto cyanAccent    = juce::Colour::fromRGB (0, 240, 255);
+    const auto magentaAccent = juce::Colour::fromRGB (255, 60, 180);
+
+    // Linkes Panel: 16-Step Pattern
+    g.setColour (juce::Colour::fromRGB (10, 15, 24).withAlpha (0.74f));
+    g.fillRoundedRectangle (leftBounds, 6.0f);
+    g.setColour (cyanAccent.withAlpha (0.38f));
+    g.drawRoundedRectangle (leftBounds, 6.0f, 1.0f);
+
+    auto leftHeader = leftBounds.reduced (10.0f, 4.0f).removeFromTop (19.0f);
+    g.setColour (cyanAccent);
+    g.setFont (juce::FontOptions (14.5f, juce::Font::bold));
+    g.drawText ("S" + juce::String (editingScene) + " // STEP SEQUENCER",
+                leftHeader, juce::Justification::centredLeft);
+
+    // Rechtes Panel: Clock, Gate & Swing
+    g.setColour (juce::Colour::fromRGB (10, 15, 24).withAlpha (0.74f));
+    g.fillRoundedRectangle (rightBounds, 6.0f);
+    g.setColour (magentaAccent.withAlpha (0.38f));
+    g.drawRoundedRectangle (rightBounds, 6.0f, 1.0f);
+
+    auto rightHeader = rightBounds.reduced (10.0f, 4.0f).removeFromTop (19.0f);
+    g.setColour (magentaAccent);
+    g.setFont (juce::FontOptions (14.5f, juce::Font::bold));
+    g.drawText ("S" + juce::String (editingScene) + " // CLOCK & GROOVE",
+                rightHeader, juce::Justification::centredLeft);
+
+    const auto rateBounds = stepSeqControls.rateBox.getBounds().toFloat();
+    auto rateLabelRect = juce::Rectangle<float> (rightBounds.getX() + 10.0f,
+                                                 rateBounds.getY(),
+                                                 rateBounds.getX() - rightBounds.getX() - 14.0f,
+                                                 rateBounds.getHeight());
+    g.setColour (juce::Colour::fromRGB (170, 200, 225));
+    g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    g.drawText ("RATE:", rateLabelRect, juce::Justification::centredLeft);
+
+    auto drawKnobLabel = [&g] (const juce::Slider& knob, const juce::String& text)
+    {
+        const auto kb = knob.getBounds().toFloat();
+        auto labelRect = juce::Rectangle<float> (kb.getX() - 10.0f, kb.getBottom() - 2.0f, kb.getWidth() + 20.0f, 15.0f);
+        g.setColour (juce::Colour::fromRGB (170, 200, 225));
+        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+        g.drawText (text, labelRect, juce::Justification::centred);
+    };
+
+    drawKnobLabel (stepSeqControls.gateKnob,   "GATE");
+    drawKnobLabel (stepSeqControls.swingKnob,  "SWING");
+    drawKnobLabel (stepSeqControls.amountKnob, "GLIDE / AMT");
 }
 
 void NeomorphX1AudioProcessorEditor::paint (juce::Graphics& g)
@@ -1703,6 +2065,10 @@ void NeomorphX1AudioProcessorEditor::paint (juce::Graphics& g)
     else if (currentTab == ActiveTab::FreeEG)
     {
         drawFreeEgPanels (g, leftPanel, rightPanel);
+    }
+    else if (currentTab == ActiveTab::StepSequencer)
+    {
+        drawStepSeqPanels (g, leftPanel, rightPanel);
     }
 }
 
@@ -1972,7 +2338,6 @@ void NeomorphX1AudioProcessorEditor::resized()
         const float leftPx  = oscPanelX[0] * w;
         const float rightPx = oscPanelX[1] * w;
 
-        // Links: 6-Punkt-Kurven-Canvas oben, Target-Dropdown unten
         freeEgControls.canvas.setBounds (
             juce::roundToInt (leftPx + 10.0f),
             juce::roundToInt (panelY + panelH * 0.16f),
@@ -1987,7 +2352,6 @@ void NeomorphX1AudioProcessorEditor::resized()
             juce::roundToInt (panelH * 0.13f)
         );
 
-        // Rechts: Mode & Sync Dropdowns oben, 3 Knobs (TIME, AMOUNT, SMOOTH) unten
         const float dropW = (panelW - 28.0f) * 0.5f;
         const float dropH = panelH * 0.13f;
         const float dropY = panelY + panelH * 0.18f;
@@ -2023,6 +2387,61 @@ void NeomorphX1AudioProcessorEditor::resized()
         placeFegKnob (freeEgControls.timeKnob,   0);
         placeFegKnob (freeEgControls.amountKnob, 1);
         placeFegKnob (freeEgControls.smoothKnob, 2);
+    }
+
+    // 12. Tab 5: Step Sequencer Layout
+    {
+        const float leftPx  = oscPanelX[0] * w;
+        const float rightPx = oscPanelX[1] * w;
+
+        stepSeqControls.canvas.setBounds (
+            juce::roundToInt (leftPx + 10.0f),
+            juce::roundToInt (panelY + panelH * 0.16f),
+            juce::roundToInt (panelW - 20.0f),
+            juce::roundToInt (panelH * 0.62f)
+        );
+
+        const float leftDropW = (panelW - 28.0f) * 0.5f;
+        const float dropH     = panelH * 0.13f;
+
+        stepSeqControls.modeBox.setBounds (
+            juce::roundToInt (leftPx + 10.0f),
+            juce::roundToInt (panelY + panelH * 0.82f),
+            juce::roundToInt (leftDropW),
+            juce::roundToInt (dropH)
+        );
+
+        stepSeqControls.lengthBox.setBounds (
+            juce::roundToInt (leftPx + 18.0f + leftDropW),
+            juce::roundToInt (panelY + panelH * 0.82f),
+            juce::roundToInt (leftDropW),
+            juce::roundToInt (dropH)
+        );
+
+        stepSeqControls.rateBox.setBounds (
+            juce::roundToInt (rightPx + 54.0f),
+            juce::roundToInt (panelY + panelH * 0.18f),
+            juce::roundToInt (panelW - 64.0f),
+            juce::roundToInt (dropH)
+        );
+
+        const float seqKnobSize = 0.044f * w;
+        const float seqKnobY    = panelY + 0.186f * h;
+
+        auto placeSeqKnob = [rightPx, panelW, seqKnobSize, seqKnobY] (juce::Slider& k, int col)
+        {
+            const float cx = rightPx + panelW * (0.20f + static_cast<float> (col) * 0.30f);
+            k.setBounds (
+                juce::roundToInt (cx - seqKnobSize * 0.5f),
+                juce::roundToInt (seqKnobY - seqKnobSize * 0.5f),
+                juce::roundToInt (seqKnobSize),
+                juce::roundToInt (seqKnobSize)
+            );
+        };
+
+        placeSeqKnob (stepSeqControls.gateKnob,   0);
+        placeSeqKnob (stepSeqControls.swingKnob,  1);
+        placeSeqKnob (stepSeqControls.amountKnob, 2);
     }
 }
 

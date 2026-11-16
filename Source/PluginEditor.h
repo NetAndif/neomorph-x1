@@ -54,7 +54,7 @@ private:
     class FreeEgCanvas : public juce::Component
     {
     public:
-        FreeEgCanvas (NeomorphX1AudioProcessorEditor& ownerEditor);
+        explicit FreeEgCanvas (NeomorphX1AudioProcessorEditor& ownerEditor);
         void paint (juce::Graphics& g) override;
         void mouseDown (const juce::MouseEvent& e) override;
         void mouseDrag (const juce::MouseEvent& e) override;
@@ -68,6 +68,20 @@ private:
         NeomorphX1AudioProcessorEditor& owner;
         int draggedPoint = -1;
         int hoveredPoint = -1;
+    };
+
+    class StepSeqCanvas : public juce::Component
+    {
+    public:
+        explicit StepSeqCanvas (NeomorphX1AudioProcessorEditor& ownerEditor);
+        void paint (juce::Graphics& g) override;
+        void mouseDown (const juce::MouseEvent& e) override;
+        void mouseDrag (const juce::MouseEvent& e) override;
+
+    private:
+        void applyMouseEdit (const juce::MouseEvent& e, bool toggleGateOnly);
+        NeomorphX1AudioProcessorEditor& owner;
+        int lastEditedStep = -1;
     };
 
     struct OscillatorControls
@@ -158,6 +172,29 @@ private:
         explicit FreeEgControls (NeomorphX1AudioProcessorEditor& owner) : canvas (owner) {}
     };
 
+    struct StepSeqControls
+    {
+        StepSeqCanvas canvas;
+
+        juce::ComboBox modeBox;
+        juce::ComboBox lengthBox;
+        juce::ComboBox rateBox;
+
+        juce::Slider gateKnob;
+        juce::Slider swingKnob;
+        juce::Slider amountKnob;
+
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> modeAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lengthAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> rateAttachment;
+
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   gateAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   swingAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   amountAttachment;
+
+        explicit StepSeqControls (NeomorphX1AudioProcessorEditor& owner) : canvas (owner) {}
+    };
+
     void timerCallback() override;
     void triggerLcdNotification (const juce::String& title, const juce::String& value);
 
@@ -168,6 +205,7 @@ private:
     void bindFilterAttachments();
     void bindEnvelopeAttachments();
     void bindFreeEgAttachments();
+    void bindStepSeqAttachments();
     void updateTabVisibility();
     void showSettingsMenu();
 
@@ -181,6 +219,8 @@ private:
                               int envIndex, juce::Colour accentColour);
     void drawFreeEgPanels (juce::Graphics& g, juce::Rectangle<float> leftBounds,
                            juce::Rectangle<float> rightBounds);
+    void drawStepSeqPanels (juce::Graphics& g, juce::Rectangle<float> leftBounds,
+                            juce::Rectangle<float> rightBounds);
 
     NeomorphX1AudioProcessor& audioProcessor;
     CyberpunkLookAndFeel cyberpunkLookAndFeel;
@@ -190,48 +230,38 @@ private:
     std::array<juce::TextButton, static_cast<size_t> (ActiveTab::NumTabs)> tabButtons;
     juce::TextButton settingsButton;
 
-    // 8 unsichtbare Klick-Buttons über den Gehäuse-Buttons rechts neben den Scene-Fadern
     std::array<juce::TextButton, 8> sceneHardwareButtons;
-    int editingScene  = 1;     // 1 = Scene 1, 2 = Scene 2
-    bool sceneSolo    = false; // Solo für aktive Scene
-    bool sceneLink    = false; // Link-Edit (spiegelt Änderungen auf beide Scenes)
+    int editingScene  = 1;
+    bool sceneSolo    = false;
+    bool sceneLink    = false;
 
-    // 4 unsichtbare Klick-Buttons unter dem LCD-Display
     std::array<juce::TextButton, 4> lcdPageButtons;
     LcdPage currentLcdPage = LcdPage::Patch;
 
-    // 10 Matrix-Drehregler + APVTS-Attachments
     std::array<juce::Slider, 10> matrixKnobs;
     std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>, 10> knobAttachments;
 
-    // 3 Scene-Fader + APVTS-Attachments
     std::array<juce::Slider, 3> sceneFaders;
     std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>, 3> faderAttachments;
 
-    // Pitch- & Mod-Wheel + APVTS-Attachments
     SpringBackSlider pitchWheel;
     SpringBackSlider modWheel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> pitchWheelAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> modWheelAttachment;
 
-    // Tab 1: Oscillators (links OSC 1, rechts OSC 2)
     std::array<OscillatorControls, 2> oscControls;
-
-    // Tab 2: Filter
     FilterControls filterControls;
-
-    // Tab 3: Envelopes (links Amp EG, rechts Filter/Mod EG)
     std::array<EnvelopeControls, 2> envControls;
-
-    // Tab 4: Free EG
     FreeEgControls freeEgControls { *this };
+    StepSeqControls stepSeqControls { *this };
 
     ActiveTab currentTab = ActiveTab::Oscillators;
 
-    // Temporäre Parameter-Einblendung im LCD-Display
     juce::String lcdNotifyTitle;
     juce::String lcdNotifyValue;
     bool showLcdNotify = false;
+    int lcdNotifyTicks = 0;
+    int lastPaintedSeqStep = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NeomorphX1AudioProcessorEditor)
 };

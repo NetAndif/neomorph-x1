@@ -87,12 +87,25 @@ public:
         std::array<std::atomic<float>*, 6> ptLevel {};
     };
 
+    struct StepSeqParamPointers
+    {
+        std::atomic<float>* mode   = nullptr;
+        std::atomic<float>* length = nullptr;
+        std::atomic<float>* rate   = nullptr;
+        std::atomic<float>* gate   = nullptr;
+        std::atomic<float>* swing  = nullptr;
+        std::atomic<float>* amount = nullptr;
+        std::array<std::atomic<float>*, 16> stepVal  {};
+        std::array<std::atomic<float>*, 16> stepGate {};
+    };
+
     struct SceneParamPointers
     {
         std::array<OscParamPointers, 2> oscs;
         FilterParamPointers filter;
         std::array<EnvParamPointers, 2> envs; // 0 = Amp EG, 1 = Filter/Mod EG
         FreeEgParamPointers freeEg;
+        StepSeqParamPointers stepSeq;
     };
 
     struct EngineParamCache
@@ -105,7 +118,14 @@ public:
         std::atomic<float>* modWheel    = nullptr;
         std::array<std::atomic<float>*, 10> matrixKnobs {};
         std::atomic<float> currentBpm { 120.0f };
+        mutable std::array<std::atomic<int>, 2> activeSeqStep { -1, -1 };
     };
+
+    int getCurrentSeqStep (int scene) const noexcept
+    {
+        const size_t idx = (scene == 2) ? 1 : 0;
+        return paramCache.activeSeqStep[idx].load();
+    }
 
     juce::AudioProcessorValueTreeState apvts;
 

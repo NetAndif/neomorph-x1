@@ -4,7 +4,6 @@
 
 namespace
 {
-    // Schneller Stereo-SVF (State Variable Filter) für 12dB und 24dB Kaskade
     struct StereoSVF
     {
         float ic1eqL = 0.0f, ic2eqL = 0.0f;
@@ -37,7 +36,7 @@ namespace
                 switch (mode)
                 {
                     case 0: // LP 12dB
-                    case 1: // LP 24dB (2. Stufe übernimmt Kaskade)
+                    case 1: // LP 24dB
                         return v2;
                     case 2: // BP 12dB
                         return v1;
@@ -45,7 +44,7 @@ namespace
                         return v0 - k * v1 - v2;
                     case 4: // Notch
                         return v0 - k * v1;
-                    default: // Comb / Formant Charakter
+                    default: // Comb / Formant
                         return 0.65f * v1 + 0.35f * (v0 - v2);
                 }
             };
@@ -62,7 +61,7 @@ namespace
 
         switch (waveType)
         {
-            case 0: // Basic Analog (Sine -> Tri -> Saw -> Square)
+            case 0: // Basic Analog
             {
                 const float sine = std::sin (t * juce::MathConstants<float>::twoPi);
                 const float tri  = 1.0f - 4.0f * std::abs (std::round (t - 0.25f) - (t - 0.25f));
@@ -142,17 +141,17 @@ namespace
 
         if (! released)
         {
-            if (mode == 0) // One-Shot
+            if (mode == 0)
                 phase = juce::jmin (1.0f, phase + step);
-            else if (mode == 1) // Sustain Hold bei Punkt 5
+            else if (mode == 1)
                 phase = juce::jmin (sustainT, phase + step);
-            else if (mode == 2) // Loop Fwd (0 .. sustainT)
+            else if (mode == 2)
             {
                 phase += step;
                 if (sustainT > 0.02f && phase >= sustainT)
                     phase = std::fmod (phase, sustainT);
             }
-            else // Loop Ping-Pong (0 <-> sustainT)
+            else
             {
                 phase += step * static_cast<float> (dir);
                 if (phase >= sustainT)      { phase = sustainT; dir = -1; }
@@ -223,6 +222,7 @@ namespace
             currentMidiNote = midiNoteNumber;
             noteVelocity    = velocity;
             pitchWheelNorm  = (static_cast<float> (currentPitchWheelPosition) - 8192.0f) / 8192.0f;
+            noteIsHeld      = true;
 
             for (size_t s = 0; s < 2; ++s)
             {
@@ -243,6 +243,13 @@ namespace
                 state.freeEgReleased = false;
                 state.freeEgDir      = 1;
 
+                state.seqPhase       = 0.0f;
+                state.seqCurrentStep = 0;
+                state.seqGateOpen    = (scParams.stepSeq.stepGate[0]->load() > 0.5f);
+                state.seqSmoothedVal = scParams.stepSeq.stepVal[0]->load();
+
+                cache.activeSeqStep[s].store (0);
+
                 updateEnvelopeParams (s);
                 state.ampEnv.noteOn();
                 state.modEnv.noteOn();
@@ -251,6 +258,8 @@ namespace
 
         void stopNote (float, bool allowTailOff) override
         {
+            noteIsHeld = false;
+
             if (allowTailOff)
             {
                 for (size_t s = 0; s < 2; ++s)
@@ -263,11 +272,12 @@ namespace
             }
             else
             {
-                for (auto& s : sceneStates)
+                for (size_t s = 0; s < 2; ++s)
                 {
-                    s.ampEnv.reset();
-                    s.modEnv.reset();
-                    s.freeEgReleased = true;
+                    sceneStates[s].ampEnv.reset();
+                    sceneStates[s].modEnv.reset();
+                    sceneStates[s].freeEgReleased = true;
+                    cache.activeSeqStep[s].store (-1);
                 }
                 clearCurrentNote();
             }
@@ -297,34 +307,103 @@ namespace
             const float s2Gain    = cache.scene2Level->load();
             const float uiPitch   = cache.pitchWheel->load();
             const float modWheel  = cache.modWheel->load();
-            const float hostBpm   = cache.currentBpm.load();
+            const float hostBpm   = juce::jmax (20.0f, cache.currentBpm.load());
 
-            // Kombinierter Pitchbend (MIDI Hardware + UI-Pitchwheel, +/- 2 Halbtöne)
             const float totalPitchSemi = juce::jlimit (-1.0f, 1.0f, pitchWheelNorm + uiPitch) * 2.0f;
 
             auto* outL = outputBuffer.getWritePointer (0);
             auto* outR = outputBuffer.getNumChannels() > 1 ? outputBuffer.getWritePointer (1) : nullptr;
 
+            constexpr int   seqLengths[3]   = { 8, 12, 16 };
+            constexpr float seqBeatDivs[6]  = { 1.0f, 0.5f, 0.75f, 0.25f, 1.0f / 6.0f, 0.125f };
+
             for (int sampleIdx = 0; sampleIdx < numSamples; ++sampleIdx)
             {
-                // Free EG für beide Scenes zuerst berechnen (da Ziel auch Scene Morph sein kann)
                 std::array<float, 2> fegModVal { 0.0f, 0.0f };
                 std::array<int, 2>   fegTarget { 0, 0 };
+                std::array<float, 2> seqModVal { 0.0f, 0.0f };
+                std::array<int, 2>   seqMode   { 0, 0 };
                 float morphModOffset = 0.0f;
 
                 for (size_t s = 0; s < 2; ++s)
                 {
                     auto& state     = sceneStates[s];
                     const auto& scP = cache.scenes[s];
-                    fegTarget[s]    = static_cast<int> (scP.freeEg.target->load());
-                    fegModVal[s]    = evaluateFreeEg (scP.freeEg,
-                                                      state.freeEgPhase,
-                                                      state.freeEgSmoothed,
-                                                      state.freeEgReleased,
-                                                      state.freeEgDir,
-                                                      sr, hostBpm);
-                    if (fegTarget[s] == 5) // Ziel: Scene Morph
+
+                    // 1. Free EG auswerten
+                    fegTarget[s] = static_cast<int> (scP.freeEg.target->load());
+                    fegModVal[s] = evaluateFreeEg (scP.freeEg,
+                                                   state.freeEgPhase,
+                                                   state.freeEgSmoothed,
+                                                   state.freeEgReleased,
+                                                   state.freeEgDir,
+                                                   sr, hostBpm);
+                    if (fegTarget[s] == 5)
                         morphModOffset += fegModVal[s] * 0.5f;
+
+                    // 2. Step Sequencer auswerten
+                    seqMode[s] = static_cast<int> (scP.stepSeq.mode->load());
+                    if (seqMode[s] > 0)
+                    {
+                        const int numSteps  = seqLengths[juce::jlimit (0, 2, static_cast<int> (scP.stepSeq.length->load()))];
+                        const int rateIdx   = juce::jlimit (0, 5, static_cast<int> (scP.stepSeq.rate->load()));
+                        const float gateLen = scP.stepSeq.gate->load();
+                        const float swing   = scP.stepSeq.swing->load();
+                        const float amt     = scP.stepSeq.amount->load();
+
+                        const float stepSec = (60.0f / hostBpm) * seqBeatDivs[rateIdx];
+                        state.seqPhase += 1.0f / juce::jmax (1.0f, stepSec * static_cast<float> (sr));
+
+                        // Swing verschiebt ungerade Steps leicht nach hinten
+                        const float swingOffset = ((state.seqCurrentStep % 2) == 1) ? (swing * 0.35f) : 0.0f;
+                        const float effectivePhase = state.seqPhase - swingOffset;
+
+                        if (state.seqPhase >= 1.0f)
+                        {
+                            state.seqPhase -= 1.0f;
+                            state.seqCurrentStep = (state.seqCurrentStep + 1) % numSteps;
+                            cache.activeSeqStep[s].store (state.seqCurrentStep);
+
+                            const bool stepActive = (scP.stepSeq.stepGate[static_cast<size_t> (state.seqCurrentStep)]->load() > 0.5f);
+                            if (noteIsHeld && stepActive)
+                            {
+                                state.seqGateOpen = true;
+                                if (seqMode[s] == 1) // Pitch-Mode retriggert Hüllkurven pro Step
+                                {
+                                    state.ampEnv.noteOn();
+                                    state.modEnv.noteOn();
+                                }
+                            }
+                            else
+                            {
+                                state.seqGateOpen = false;
+                            }
+                        }
+
+                        // Gate-Schließung innerhalb des Steps (im Pitch-Mode)
+                        if (seqMode[s] == 1 && state.seqGateOpen && effectivePhase >= gateLen)
+                        {
+                            state.seqGateOpen = false;
+                            state.ampEnv.noteOff();
+                            state.modEnv.noteOff();
+                        }
+
+                        const size_t stIdx = static_cast<size_t> (juce::jlimit (0, 15, state.seqCurrentStep));
+                        const bool active  = (scP.stepSeq.stepGate[stIdx]->load() > 0.5f);
+                        const float targetStepVal = active ? scP.stepSeq.stepVal[stIdx]->load() : 0.0f;
+
+                        // Glide / Smoothing zwischen den Steps
+                        const float glideCoeff = (seqMode[s] == 1)
+                                                     ? (1.0f - std::pow (amt, 0.25f) * 0.996f)
+                                                     : 0.02f;
+                        state.seqSmoothedVal += glideCoeff * (targetStepVal - state.seqSmoothedVal);
+
+                        seqModVal[s] = (seqMode[s] == 1) ? state.seqSmoothedVal
+                                                         : (state.seqSmoothedVal * amt);
+
+                        if (seqMode[s] == 4) // Ziel: Scene Morph
+                            morphModOffset += seqModVal[s] * 0.5f;
+                    }
                 }
 
                 const float effectiveMorph = juce::jlimit (0.0f, 1.0f, baseMorph + morphModOffset);
@@ -347,6 +426,10 @@ namespace
                     const float fegPitchMod = (fegTarget[s] == 4) ? (fegModVal[s] * 12.0f) : 0.0f;
                     const float fegCutMod   = (fegTarget[s] == 1) ? (fegModVal[s] * 4.0f)  : 0.0f;
 
+                    const float seqPitchMod = (seqMode[s] == 1) ? (seqModVal[s] * 12.0f) : 0.0f;
+                    const float seqCutMod   = (seqMode[s] == 2) ? (seqModVal[s] * 4.0f)  : 0.0f;
+                    const float seqPosMod   = (seqMode[s] == 3) ? seqModVal[s]           : 0.0f;
+
                     float osc1L = 0.0f, osc1R = 0.0f;
                     float osc2L = 0.0f, osc2R = 0.0f;
 
@@ -357,13 +440,13 @@ namespace
                         const float oct  = oscP.octave->load();
                         const float semi = oscP.semi->load();
                         const float det  = oscP.detune->load() * 0.01f;
-                        const float pos  = juce::jlimit (0.0f, 1.0f, oscP.position->load() + fegPosMod);
+                        const float pos  = juce::jlimit (0.0f, 1.0f, oscP.position->load() + fegPosMod + seqPosMod);
                         const float mrph = juce::jlimit (0.0f, 1.0f, oscP.morph->load() + modWheel * 0.35f + fegMorphMod);
                         const float pan  = oscP.pan->load();
                         const float lvl  = oscP.level->load();
 
                         const float notePitch = static_cast<float> (currentMidiNote)
-                                              + (oct * 12.0f) + semi + det + totalPitchSemi + fegPitchMod;
+                                              + (oct * 12.0f) + semi + det + totalPitchSemi + fegPitchMod + seqPitchMod;
                         const float freqHz = 440.0f * std::pow (2.0f, (notePitch - 69.0f) / 12.0f);
 
                         state.oscPhase[o] += freqHz / static_cast<float> (sr);
@@ -431,7 +514,7 @@ namespace
                         const float keyOctaves = ((static_cast<float> (currentMidiNote) - 60.0f) / 12.0f) * keytrack;
                         const float envOctaves = modEnvVal * envAmt * 5.0f;
                         const float velOctaves = (noteVelocity - 0.5f) * velSens * 3.0f;
-                        const float modOctaves = modWheel * 2.5f + fegCutMod;
+                        const float modOctaves = modWheel * 2.5f + fegCutMod + seqCutMod;
 
                         const float modCut = baseCut * std::pow (2.0f, keyOctaves + envOctaves + velOctaves + modOctaves);
 
@@ -451,8 +534,11 @@ namespace
                 if (outR != nullptr)
                     outR[startSample + sampleIdx] += std::tanh (mixR);
 
-                if (! sceneStates[0].ampEnv.isActive() && ! sceneStates[1].ampEnv.isActive())
+                const bool seqKeepingAlive = noteIsHeld && (seqMode[0] == 1 || seqMode[1] == 1);
+                if (! seqKeepingAlive && ! sceneStates[0].ampEnv.isActive() && ! sceneStates[1].ampEnv.isActive())
                 {
+                    cache.activeSeqStep[0].store (-1);
+                    cache.activeSeqStep[1].store (-1);
                     clearCurrentNote();
                     break;
                 }
@@ -472,6 +558,11 @@ namespace
             float freeEgSmoothed = 0.0f;
             bool  freeEgReleased = false;
             int   freeEgDir      = 1;
+
+            float seqPhase       = 0.0f;
+            int   seqCurrentStep = 0;
+            bool  seqGateOpen    = true;
+            float seqSmoothedVal = 0.0f;
         };
 
         void updateEnvelopeParams (size_t sceneIdx)
@@ -499,6 +590,7 @@ namespace
         int currentMidiNote  = 60;
         float noteVelocity   = 0.0f;
         float pitchWheelNorm = 0.0f;
+        bool noteIsHeld      = false;
     };
 }
 
@@ -590,6 +682,21 @@ void NeomorphX1AudioProcessor::cacheParameterPointers()
             const auto ptStr = juce::String (static_cast<int> (pt + 1));
             sc.freeEg.ptTime[pt]  = apvts.getRawParameterValue (fegp + "pt" + ptStr + "_t");
             sc.freeEg.ptLevel[pt] = apvts.getRawParameterValue (fegp + "pt" + ptStr + "_v");
+        }
+
+        const auto seqp = scenePrefix + "seq_";
+        sc.stepSeq.mode   = apvts.getRawParameterValue (seqp + "mode");
+        sc.stepSeq.length = apvts.getRawParameterValue (seqp + "length");
+        sc.stepSeq.rate   = apvts.getRawParameterValue (seqp + "rate");
+        sc.stepSeq.gate   = apvts.getRawParameterValue (seqp + "gate");
+        sc.stepSeq.swing  = apvts.getRawParameterValue (seqp + "swing");
+        sc.stepSeq.amount = apvts.getRawParameterValue (seqp + "amount");
+
+        for (size_t st = 0; st < 16; ++st)
+        {
+            const auto stStr = juce::String (static_cast<int> (st + 1));
+            sc.stepSeq.stepVal[st]  = apvts.getRawParameterValue (seqp + "st" + stStr + "_v");
+            sc.stepSeq.stepGate[st] = apvts.getRawParameterValue (seqp + "st" + stStr + "_g");
         }
     }
 }
@@ -741,7 +848,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
                 timeRange, defaultRelease));
         }
 
-        // 4c. Filter Tab (s1_flt_* & s2_flt_*)
+        // 4c. Filter Tab
         const auto fltPrefix = scenePrefix + "flt_";
         const auto fltLabel  = sceneLabel + "Filter ";
 
@@ -788,7 +895,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
             juce::ParameterID { fltPrefix + "vel_sens", 1 }, fltLabel + "Velocity",
             juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.25f));
 
-        // 4d. Free EG Tab (s1_feg_* & s2_feg_*)
+        // 4d. Free EG Tab
         const auto fegPrefix = scenePrefix + "feg_";
         const auto fegLabel  = sceneLabel + "Free EG ";
 
@@ -804,7 +911,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
 
         params.push_back (std::make_unique<juce::AudioParameterChoice> (
             juce::ParameterID { fegPrefix + "target", 1 }, fegLabel + "Target",
-            fegTargets, 0)); // Default: Off (damit der bestehende Grundsound unangetastet bleibt, bis man ein Ziel wählt)
+            fegTargets, 0));
 
         params.push_back (std::make_unique<juce::AudioParameterChoice> (
             juce::ParameterID { fegPrefix + "mode", 1 }, fegLabel + "Mode",
@@ -845,6 +952,65 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
                 fegLabel + "Pt " + ptStr + " Level",
                 juce::NormalisableRange<float> (-1.0f, 1.0f, 0.001f),
                 defLevels[static_cast<size_t> (pt)]));
+        }
+
+        // 4e. Step Sequencer Tab (s1_seq_* & s2_seq_*)
+        const auto seqPrefix = scenePrefix + "seq_";
+        const auto seqLabel  = sceneLabel + "Step Seq ";
+
+        const juce::StringArray seqModes = {
+            "Off", "Pitch (Seq)", "Filter Cutoff", "Osc Position", "Scene Morph"
+        };
+        const juce::StringArray seqLengths = {
+            "8 Steps", "12 Steps", "16 Steps"
+        };
+        const juce::StringArray seqRates = {
+            "1/4 Note", "1/8 Note", "1/8 Dotted", "1/16 Note", "1/16 Triplet", "1/32 Note"
+        };
+
+        params.push_back (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { seqPrefix + "mode", 1 }, seqLabel + "Mode",
+            seqModes, 0));
+
+        params.push_back (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { seqPrefix + "length", 1 }, seqLabel + "Length",
+            seqLengths, 2)); // 16 Steps
+
+        params.push_back (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { seqPrefix + "rate", 1 }, seqLabel + "Rate",
+            seqRates, 3)); // 1/16 Note
+
+        params.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { seqPrefix + "gate", 1 }, seqLabel + "Gate",
+            juce::NormalisableRange<float> (0.10f, 1.00f, 0.01f), 0.65f));
+
+        params.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { seqPrefix + "swing", 1 }, seqLabel + "Swing",
+            juce::NormalisableRange<float> (0.00f, 0.75f, 0.01f), 0.00f));
+
+        params.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { seqPrefix + "amount", 1 }, seqLabel + "Amount / Glide",
+            juce::NormalisableRange<float> (0.00f, 1.00f, 0.01f), 0.25f));
+
+        // Klassisches Synthwave-Oktav/Quinten-Pattern als Default-Kurve
+        constexpr std::array<float, 16> defSteps = {
+            0.0f, 0.0f, 1.0f, 0.0f,  0.5833f, 0.0f, 1.0f, 0.4167f,
+            0.0f, 0.0f, 1.0f, 0.0f, -0.1667f, 0.0f, 0.5833f, 0.8333f
+        };
+
+        for (int st = 0; st < 16; ++st)
+        {
+            const auto stStr = juce::String (st + 1);
+            params.push_back (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { seqPrefix + "st" + stStr + "_v", 1 },
+                seqLabel + "Step " + stStr,
+                juce::NormalisableRange<float> (-1.0f, 1.0f, 1.0f / 12.0f),
+                defSteps[static_cast<size_t> (st)]));
+
+            params.push_back (std::make_unique<juce::AudioParameterBool> (
+                juce::ParameterID { seqPrefix + "st" + stStr + "_g", 1 },
+                seqLabel + "Gate " + stStr,
+                true));
         }
     }
 
@@ -923,7 +1089,7 @@ void NeomorphX1AudioProcessor::randomizeSceneParameters (int scene)
         if (auto* rangedParam = dynamic_cast<juce::RangedAudioParameter*> (param))
         {
             const auto id = rangedParam->getParameterID();
-            if (id.startsWith (prefix) && ! id.contains ("_feg_pt"))
+            if (id.startsWith (prefix) && ! id.contains ("_feg_pt") && ! id.contains ("_seq_st"))
             {
                 if (id.endsWith ("_level"))
                     rangedParam->setValueNotifyingHost (rng.nextFloat() * 0.45f + 0.50f);
@@ -1039,7 +1205,6 @@ void NeomorphX1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
 
-    // Host-BPM für Tempo-Sync (Free EG / Step Sequencer) auslesen
     if (auto* ph = getPlayHead())
     {
         if (auto posInfo = ph->getPosition())
@@ -1049,7 +1214,6 @@ void NeomorphX1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
         }
     }
 
-    // UI-Wheels mit eingehenden Hardware-MIDI-Wheels synchronisieren
     for (const auto metadata : midiMessages)
     {
         const auto msg = metadata.getMessage();
@@ -1068,7 +1232,6 @@ void NeomorphX1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
         }
     }
 
-    // 16-stimmige Dual-Scene-Synthese rendern
     synth.renderNextBlock (buffer, midiMessages, 0, buffer.getNumSamples());
 }
 
