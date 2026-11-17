@@ -249,7 +249,6 @@ void NeomorphX1AudioProcessorEditor::StepSeqCanvas::applyMouseEdit (const juce::
     const float rawNorm = juce::jlimit (-1.0f, 1.0f, juce::jmap (e.position.y, inner.getBottom(), inner.getY(), -1.0f, 1.0f));
     const int mode      = owner.stepSeqControls.modeBox.getSelectedItemIndex();
 
-    // Im Pitch-Mode auf exakte Halbtöne (-12..+12) einrasten
     const float val = (mode == 1) ? (std::round (rawNorm * 12.0f) / 12.0f) : rawNorm;
 
     for (int sc = 1; sc <= 2; ++sc)
@@ -313,7 +312,6 @@ void NeomorphX1AudioProcessorEditor::StepSeqCanvas::paint (juce::Graphics& g)
                                             colW - 3.0f,
                                             inner.getHeight());
 
-        // 4er-Beat-Gruppierung leicht hervorheben
         if ((st % 4) == 0 && st > 0)
         {
             g.setColour (cyan.withAlpha (0.12f));
@@ -399,12 +397,19 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
     settingsButton.onClick = [this] { showSettingsMenu(); };
     addAndMakeVisible (settingsButton);
 
+    // 10 rechte Drehregler:
+    // [0] = Master Volume (80%), [1] = Master Pan (50% = Center), [2..9] = Assign 1..8
     for (size_t i = 0; i < matrixKnobs.size(); ++i)
     {
         auto& knob = matrixKnobs[i];
         knob.setSliderStyle (juce::Slider::RotaryVerticalDrag);
         knob.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-        knob.setColour (juce::Slider::rotarySliderFillColourId, juce::Colour::fromRGB (0, 240, 255));
+
+        const auto accentCol = (i == 0) ? juce::Colour::fromRGB (0, 240, 255)
+                             : (i == 1) ? juce::Colour::fromRGB (255, 60, 180)
+                                        : juce::Colour::fromRGB (0, 240, 255);
+        knob.setColour (juce::Slider::rotarySliderFillColourId, accentCol);
+        knob.getProperties().set ("isBipolar", i == 1);
 
         const auto paramID = "knob_" + juce::String (static_cast<int> (i + 1));
         if (auto* param = audioProcessor.apvts.getParameter (paramID))
@@ -412,9 +417,27 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
 
         knob.onValueChange = [this, i]
         {
-            const int pct = juce::roundToInt (matrixKnobs[i].getValue() * 100.0);
-            triggerLcdNotification ("MATRIX ASSIGN " + juce::String (static_cast<int> (i + 1)),
-                                    juce::String (pct) + "%");
+            const double val = matrixKnobs[i].getValue();
+            if (i == 0)
+            {
+                const int pct = juce::roundToInt (val * 100.0);
+                triggerLcdNotification ("MASTER VOLUME", juce::String (pct) + "%");
+            }
+            else if (i == 1)
+            {
+                const int panOffset = juce::roundToInt ((val - 0.5) * 200.0);
+                if (std::abs (panOffset) <= 1)
+                    triggerLcdNotification ("MASTER PAN", "CENTER (50%)");
+                else
+                    triggerLcdNotification ("MASTER PAN",
+                                            juce::String::formatted ("%d%% %s", std::abs (panOffset), panOffset < 0 ? "L" : "R"));
+            }
+            else
+            {
+                const int pct = juce::roundToInt (val * 100.0);
+                triggerLcdNotification ("MATRIX ASSIGN " + juce::String (static_cast<int> (i - 1)),
+                                        juce::String (pct) + "%");
+            }
         };
 
         addAndMakeVisible (knob);
@@ -897,15 +920,146 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
     setupSeqKnob (stepSeqControls.amountKnob, "amount", "GLIDE / AMT",
         [] (double v) { return juce::String::formatted ("%d%%", juce::roundToInt (v * 100.0)); });
 
-    // Attachments binden
+    // --- Tab 6: Mod Matrix & LFO 1 Controls ---
+    const juce::StringArray modSrcItems = {
+        "Off",
+        "LFO 1 (Sine)", "LFO 1 (Tri)", "LFO 1 (Saw)",
+        "Mod Wheel", "Velocity", "Keytrack",
+        "Amp EG", "Mod EG", "Free EG", "Step Seq",
+        "Assign 1", "Assign 2", "Assign 3", "Assign 4",
+        "Assign 5", "Assign 6", "Assign 7", "Assign 8"
+    };
+
+    const juce::StringArray modDstItems = {
+        "Off",
+        "Filter Cutoff", "Filter Resonance",
+        "Osc 1 Pitch", "Osc 2 Pitch", "Osc 1+2 Pitch",
+        "Osc 1 Position", "Osc 2 Position", "Osc 1+2 Morph",
+        "Osc 1 Level", "Osc 2 Level",
+        "Scene Morph", "LFO 1 Rate"
+    };
+
+    for (size_t m = 0; m < 4; ++m)
+    {
+        auto& slot = modMatrixControls.slots[m];
+        const int slotNum = static_cast<int> (m + 1);
+
+        auto mirrorModSlot = [this, slotNum] (const juce::String& suffix)
+        {
+            if (! sceneLink)
+                return;
+
+            const int otherScene = (editingScene == 1) ? 2 : 1;
+            const auto srcID = "s" + juce::String (editingScene) + "_mod" + juce::String (slotNum) + "_" + suffix;
+            const auto dstID = "s" + juce::String (otherScene)   + "_mod" + juce::String (slotNum) + "_" + suffix;
+            if (auto* srcP = audioProcessor.apvts.getParameter (srcID))
+                if (auto* dstP = audioProcessor.apvts.getParameter (dstID))
+                    dstP->setValueNotifyingHost (srcP->getValue());
+        };
+
+        slot.srcBox.addItemList (modSrcItems, 1);
+        slot.srcBox.setJustificationType (juce::Justification::centredLeft);
+        slot.srcBox.onChange = [this, &slot, slotNum, mirrorModSlot]
+        {
+            mirrorModSlot ("src");
+            triggerLcdNotification (juce::String::formatted ("S%d // MOD %d SRC", editingScene, slotNum),
+                                    slot.srcBox.getText());
+        };
+        addChildComponent (slot.srcBox);
+
+        slot.dstBox.addItemList (modDstItems, 1);
+        slot.dstBox.setJustificationType (juce::Justification::centredLeft);
+        slot.dstBox.onChange = [this, &slot, slotNum, mirrorModSlot]
+        {
+            mirrorModSlot ("dst");
+            triggerLcdNotification (juce::String::formatted ("S%d // MOD %d DST", editingScene, slotNum),
+                                    slot.dstBox.getText());
+        };
+        addChildComponent (slot.dstBox);
+
+        slot.amtKnob.setSliderStyle (juce::Slider::RotaryVerticalDrag);
+        slot.amtKnob.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        slot.amtKnob.setColour (juce::Slider::rotarySliderFillColourId, cyanAccent);
+        slot.amtKnob.getProperties().set ("isBipolar", true);
+        slot.amtKnob.onValueChange = [this, &slot, slotNum, mirrorModSlot]
+        {
+            mirrorModSlot ("amt");
+            const int pct = juce::roundToInt (slot.amtKnob.getValue() * 100.0);
+            triggerLcdNotification (juce::String::formatted ("S%d // MOD %d AMT", editingScene, slotNum),
+                                    juce::String::formatted ("%+d%%", pct));
+        };
+        addChildComponent (slot.amtKnob);
+    }
+
+    const juce::StringArray lfoSyncItems = {
+        "Free (Hz)", "1/1 Bar", "1/2 Note", "1/4 Note", "1/8 Note", "1/16 Note"
+    };
+
+    auto mirrorLfoParam = [this] (const juce::String& suffix)
+    {
+        if (! sceneLink)
+            return;
+
+        const int otherScene = (editingScene == 1) ? 2 : 1;
+        const auto srcID = "s" + juce::String (editingScene) + "_lfo1_" + suffix;
+        const auto dstID = "s" + juce::String (otherScene)   + "_lfo1_" + suffix;
+        if (auto* srcP = audioProcessor.apvts.getParameter (srcID))
+            if (auto* dstP = audioProcessor.apvts.getParameter (dstID))
+                dstP->setValueNotifyingHost (srcP->getValue());
+    };
+
+    modMatrixControls.lfoSyncBox.addItemList (lfoSyncItems, 1);
+    modMatrixControls.lfoSyncBox.setJustificationType (juce::Justification::centredLeft);
+    modMatrixControls.lfoSyncBox.onChange = [this, mirrorLfoParam]
+    {
+        mirrorLfoParam ("sync");
+        triggerLcdNotification ("S" + juce::String (editingScene) + " // LFO 1 SYNC",
+                                modMatrixControls.lfoSyncBox.getText());
+    };
+    addChildComponent (modMatrixControls.lfoSyncBox);
+
+    auto setupLfoKnob = [this, mirrorLfoParam, magentaAccent] (juce::Slider& slider,
+                                                               const juce::String& paramSuffix,
+                                                               const juce::String& paramName,
+                                                               std::function<juce::String (double)> formatVal)
+    {
+        slider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
+        slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        slider.setColour (juce::Slider::rotarySliderFillColourId, magentaAccent);
+        slider.getProperties().set ("isBipolar", false);
+
+        slider.onValueChange = [this, &slider, mirrorLfoParam, paramSuffix, paramName, formatVal]
+        {
+            mirrorLfoParam (paramSuffix);
+            triggerLcdNotification ("S" + juce::String (editingScene) + " // LFO " + paramName,
+                                    formatVal (slider.getValue()));
+        };
+
+        addChildComponent (slider);
+    };
+
+    setupLfoKnob (modMatrixControls.lfoRateKnob, "rate", "RATE",
+        [] (double hz) { return juce::String::formatted ("%.2f HZ", hz); });
+
+    setupLfoKnob (modMatrixControls.lfoFadeKnob, "fade", "FADE IN",
+        [] (double sec) -> juce::String {
+            if (sec < 1.0)
+                return juce::String::formatted ("%d MS", juce::roundToInt (sec * 1000.0));
+            return juce::String::formatted ("%.2f S", sec);
+        });
+
+    setupLfoKnob (modMatrixControls.lfoDepthKnob, "depth", "DEPTH",
+        [] (double v) { return juce::String::formatted ("%d%%", juce::roundToInt (v * 100.0)); });
+
+    // Alle Attachments binden
     bindOscillatorAttachments();
     bindFilterAttachments();
     bindEnvelopeAttachments();
     bindFreeEgAttachments();
     bindStepSeqAttachments();
+    bindModMatrixAttachments();
     updateTabVisibility();
 
-    // 30 Hz UI-Timer für LCD-Auto-Hide & Step-Sequencer-Lauflicht
     startTimerHz (30);
 
     setResizable (true, true);
@@ -947,6 +1101,15 @@ void NeomorphX1AudioProcessorEditor::timerCallback()
             stepSeqControls.canvas.repaint();
         }
     }
+    else if (currentTab == ActiveTab::ModMatrix)
+    {
+        const float curLfo = audioProcessor.getLiveLfoValue (editingScene);
+        if (std::abs (curLfo - lastPaintedLfo) > 0.02f)
+        {
+            lastPaintedLfo = curLfo;
+            needsRepaint = true;
+        }
+    }
 
     if (needsRepaint)
         repaint();
@@ -957,7 +1120,7 @@ void NeomorphX1AudioProcessorEditor::triggerLcdNotification (const juce::String&
     lcdNotifyTitle = title;
     lcdNotifyValue = value;
     showLcdNotify  = true;
-    lcdNotifyTicks = 48; // ~1.6 Sekunden bei 30 Hz
+    lcdNotifyTicks = 48;
     repaint();
 }
 
@@ -986,6 +1149,7 @@ void NeomorphX1AudioProcessorEditor::setEditingScene (int newScene)
     bindEnvelopeAttachments();
     bindFreeEgAttachments();
     bindStepSeqAttachments();
+    bindModMatrixAttachments();
     freeEgControls.canvas.repaint();
     stepSeqControls.canvas.repaint();
 
@@ -1233,6 +1397,57 @@ void NeomorphX1AudioProcessorEditor::bindStepSeqAttachments()
     bindSlider (stepSeqControls.amountKnob, stepSeqControls.amountAttachment, prefix + "amount");
 }
 
+void NeomorphX1AudioProcessorEditor::bindModMatrixAttachments()
+{
+    const auto scenePrefix = "s" + juce::String (editingScene) + "_";
+
+    for (size_t m = 0; m < 4; ++m)
+    {
+        auto& slot = modMatrixControls.slots[m];
+        const auto mp = scenePrefix + "mod" + juce::String (static_cast<int> (m + 1)) + "_";
+
+        slot.srcAttachment.reset();
+        slot.dstAttachment.reset();
+        slot.amtAttachment.reset();
+
+        slot.srcAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+            audioProcessor.apvts, mp + "src", slot.srcBox);
+
+        slot.dstAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+            audioProcessor.apvts, mp + "dst", slot.dstBox);
+
+        if (auto* param = audioProcessor.apvts.getParameter (mp + "amt"))
+            slot.amtKnob.setDoubleClickReturnValue (true, param->getDefaultValue());
+
+        slot.amtAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+            audioProcessor.apvts, mp + "amt", slot.amtKnob);
+    }
+
+    const auto lfop = scenePrefix + "lfo1_";
+    modMatrixControls.lfoSyncAttachment.reset();
+    modMatrixControls.lfoRateAttachment.reset();
+    modMatrixControls.lfoFadeAttachment.reset();
+    modMatrixControls.lfoDepthAttachment.reset();
+
+    modMatrixControls.lfoSyncAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+        audioProcessor.apvts, lfop + "sync", modMatrixControls.lfoSyncBox);
+
+    auto bindLfoSlider = [this] (juce::Slider& slider,
+                                 std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>& attachment,
+                                 const juce::String& paramID)
+    {
+        if (auto* param = audioProcessor.apvts.getParameter (paramID))
+            slider.setDoubleClickReturnValue (true, param->getDefaultValue());
+
+        attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+            audioProcessor.apvts, paramID, slider);
+    };
+
+    bindLfoSlider (modMatrixControls.lfoRateKnob,  modMatrixControls.lfoRateAttachment,  lfop + "rate");
+    bindLfoSlider (modMatrixControls.lfoFadeKnob,  modMatrixControls.lfoFadeAttachment,  lfop + "fade");
+    bindLfoSlider (modMatrixControls.lfoDepthKnob, modMatrixControls.lfoDepthAttachment, lfop + "depth");
+}
+
 void NeomorphX1AudioProcessorEditor::updateTabVisibility()
 {
     const bool showOsc = (currentTab == ActiveTab::Oscillators);
@@ -1285,6 +1500,18 @@ void NeomorphX1AudioProcessorEditor::updateTabVisibility()
     stepSeqControls.gateKnob.setVisible (showSeq);
     stepSeqControls.swingKnob.setVisible (showSeq);
     stepSeqControls.amountKnob.setVisible (showSeq);
+
+    const bool showMod = (currentTab == ActiveTab::ModMatrix);
+    for (auto& slot : modMatrixControls.slots)
+    {
+        slot.srcBox.setVisible (showMod);
+        slot.dstBox.setVisible (showMod);
+        slot.amtKnob.setVisible (showMod);
+    }
+    modMatrixControls.lfoSyncBox.setVisible (showMod);
+    modMatrixControls.lfoRateKnob.setVisible (showMod);
+    modMatrixControls.lfoFadeKnob.setVisible (showMod);
+    modMatrixControls.lfoDepthKnob.setVisible (showMod);
 }
 
 void NeomorphX1AudioProcessorEditor::showSettingsMenu()
@@ -1495,23 +1722,31 @@ void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rec
                                                     cellW, cellH);
 
                 const int pct = juce::roundToInt (matrixKnobs[static_cast<size_t> (idx)].getValue() * 100.0);
-                g.setColour (pct > 0 ? juce::Colour::fromRGB (0, 240, 255)
-                                     : juce::Colour::fromRGB (115, 150, 180));
-                g.drawText ("A" + juce::String (idx + 1) + ":" + juce::String (pct),
-                            cell, juce::Justification::centred);
+                juce::String labelStr;
+                if (idx == 0)      labelStr = "VOL:" + juce::String (pct);
+                else if (idx == 1) labelStr = "PAN:" + juce::String (pct);
+                else               labelStr = "A" + juce::String (idx - 1) + ":" + juce::String (pct);
+
+                g.setColour (idx < 2 ? juce::Colour::fromRGB (255, 60, 180)
+                                     : (pct > 0 ? juce::Colour::fromRGB (0, 240, 255)
+                                                : juce::Colour::fromRGB (115, 150, 180)));
+                g.drawText (labelStr, cell, juce::Justification::centred);
             }
             break;
         }
 
         case LcdPage::System:
         {
+            const int volPct = juce::roundToInt (matrixKnobs[0].getValue() * 100.0);
+            const int panPct = juce::roundToInt (matrixKnobs[1].getValue() * 100.0);
+
             g.setColour (juce::Colour::fromRGB (0, 240, 255));
             g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
             g.drawText ("NEOMORPH X1 // DUAL-SCENE", screen.removeFromTop (21.0f), juce::Justification::centred);
 
             g.setColour (juce::Colour::fromRGB (170, 205, 230));
             g.setFont (juce::FontOptions (12.5f, juce::Font::plain));
-            g.drawText ("EDITING: SCENE 0" + juce::String (editingScene) + "   |   16 VOICES",
+            g.drawText (juce::String::formatted ("VOL: %d%%   |   PAN: %d%%", volPct, panPct),
                         screen, juce::Justification::centred);
             break;
         }
@@ -1976,7 +2211,6 @@ void NeomorphX1AudioProcessorEditor::drawStepSeqPanels (juce::Graphics& g,
     const auto cyanAccent    = juce::Colour::fromRGB (0, 240, 255);
     const auto magentaAccent = juce::Colour::fromRGB (255, 60, 180);
 
-    // Linkes Panel: 16-Step Pattern
     g.setColour (juce::Colour::fromRGB (10, 15, 24).withAlpha (0.74f));
     g.fillRoundedRectangle (leftBounds, 6.0f);
     g.setColour (cyanAccent.withAlpha (0.38f));
@@ -1988,7 +2222,6 @@ void NeomorphX1AudioProcessorEditor::drawStepSeqPanels (juce::Graphics& g,
     g.drawText ("S" + juce::String (editingScene) + " // STEP SEQUENCER",
                 leftHeader, juce::Justification::centredLeft);
 
-    // Rechtes Panel: Clock, Gate & Swing
     g.setColour (juce::Colour::fromRGB (10, 15, 24).withAlpha (0.74f));
     g.fillRoundedRectangle (rightBounds, 6.0f);
     g.setColour (magentaAccent.withAlpha (0.38f));
@@ -2021,6 +2254,84 @@ void NeomorphX1AudioProcessorEditor::drawStepSeqPanels (juce::Graphics& g,
     drawKnobLabel (stepSeqControls.gateKnob,   "GATE");
     drawKnobLabel (stepSeqControls.swingKnob,  "SWING");
     drawKnobLabel (stepSeqControls.amountKnob, "GLIDE / AMT");
+}
+
+void NeomorphX1AudioProcessorEditor::drawModMatrixPanels (juce::Graphics& g,
+                                                          juce::Rectangle<float> leftBounds,
+                                                          juce::Rectangle<float> rightBounds)
+{
+    const auto cyanAccent    = juce::Colour::fromRGB (0, 240, 255);
+    const auto magentaAccent = juce::Colour::fromRGB (255, 60, 180);
+
+    // Linkes Panel: 4 Modulations-Slots
+    g.setColour (juce::Colour::fromRGB (10, 15, 24).withAlpha (0.74f));
+    g.fillRoundedRectangle (leftBounds, 6.0f);
+    g.setColour (cyanAccent.withAlpha (0.38f));
+    g.drawRoundedRectangle (leftBounds, 6.0f, 1.0f);
+
+    auto leftHeader = leftBounds.reduced (10.0f, 4.0f).removeFromTop (19.0f);
+    g.setColour (cyanAccent);
+    g.setFont (juce::FontOptions (14.5f, juce::Font::bold));
+    g.drawText ("S" + juce::String (editingScene) + " // MOD MATRIX (SLOTS 1-4)",
+                leftHeader, juce::Justification::centredLeft);
+
+    // Rechtes Panel: LFO 1 + Live Monitor
+    g.setColour (juce::Colour::fromRGB (10, 15, 24).withAlpha (0.74f));
+    g.fillRoundedRectangle (rightBounds, 6.0f);
+    g.setColour (magentaAccent.withAlpha (0.38f));
+    g.drawRoundedRectangle (rightBounds, 6.0f, 1.0f);
+
+    auto rightHeader = rightBounds.reduced (10.0f, 4.0f).removeFromTop (19.0f);
+    g.setColour (magentaAccent);
+    g.setFont (juce::FontOptions (14.5f, juce::Font::bold));
+    g.drawText ("S" + juce::String (editingScene) + " // LFO 1 & MONITOR",
+                rightHeader, juce::Justification::centredLeft);
+
+    const auto syncBounds = modMatrixControls.lfoSyncBox.getBounds().toFloat();
+    auto syncLabelRect = juce::Rectangle<float> (rightBounds.getX() + 10.0f,
+                                                 syncBounds.getY(),
+                                                 syncBounds.getX() - rightBounds.getX() - 14.0f,
+                                                 syncBounds.getHeight());
+    g.setColour (juce::Colour::fromRGB (170, 200, 225));
+    g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    g.drawText ("LFO SYNC:", syncLabelRect, juce::Justification::centredLeft);
+
+    auto drawKnobLabel = [&g] (const juce::Slider& knob, const juce::String& text)
+    {
+        const auto kb = knob.getBounds().toFloat();
+        auto labelRect = juce::Rectangle<float> (kb.getX() - 10.0f, kb.getBottom() - 3.0f, kb.getWidth() + 20.0f, 14.0f);
+        g.setColour (juce::Colour::fromRGB (170, 200, 225));
+        g.setFont (juce::FontOptions (11.5f, juce::Font::bold));
+        g.drawText (text, labelRect, juce::Justification::centred);
+    };
+
+    drawKnobLabel (modMatrixControls.lfoRateKnob,  "RATE");
+    drawKnobLabel (modMatrixControls.lfoFadeKnob,  "FADE");
+    drawKnobLabel (modMatrixControls.lfoDepthKnob, "DEPTH");
+
+    // Live-Pegelbalken für LFO 1 unten im rechten Panel
+    auto meterBox = juce::Rectangle<float> (rightBounds.getX() + 10.0f,
+                                            rightBounds.getBottom() - rightBounds.getHeight() * 0.16f,
+                                            rightBounds.getWidth() - 20.0f,
+                                            rightBounds.getHeight() * 0.11f);
+    g.setColour (juce::Colour::fromRGB (6, 10, 16));
+    g.fillRoundedRectangle (meterBox, 3.0f);
+    g.setColour (juce::Colour::fromRGB (35, 55, 75).withAlpha (0.7f));
+    g.drawRoundedRectangle (meterBox, 3.0f, 1.0f);
+
+    const float lfoVal = audioProcessor.getLiveLfoValue (editingScene);
+    const float midX   = meterBox.getCentreX();
+    const float fillW  = (meterBox.getWidth() * 0.48f) * std::abs (lfoVal);
+
+    g.setColour (magentaAccent.withAlpha (0.85f));
+    if (lfoVal >= 0.0f)
+        g.fillRoundedRectangle (midX, meterBox.getY() + 2.0f, fillW, meterBox.getHeight() - 4.0f, 2.0f);
+    else
+        g.fillRoundedRectangle (midX - fillW, meterBox.getY() + 2.0f, fillW, meterBox.getHeight() - 4.0f, 2.0f);
+
+    g.setColour (juce::Colour::fromRGB (180, 215, 235));
+    g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+    g.drawText ("LFO 1 LIVE OUTPUT", meterBox, juce::Justification::centred);
 }
 
 void NeomorphX1AudioProcessorEditor::paint (juce::Graphics& g)
@@ -2069,6 +2380,10 @@ void NeomorphX1AudioProcessorEditor::paint (juce::Graphics& g)
     else if (currentTab == ActiveTab::StepSequencer)
     {
         drawStepSeqPanels (g, leftPanel, rightPanel);
+    }
+    else if (currentTab == ActiveTab::ModMatrix)
+    {
+        drawModMatrixPanels (g, leftPanel, rightPanel);
     }
 }
 
@@ -2146,7 +2461,7 @@ void NeomorphX1AudioProcessorEditor::resized()
         juce::roundToInt (iconSize)
     );
 
-    // 5. 10 Matrix-Knobs
+    // 5. 10 rechte Drehregler (Vol, Pan, Assign 1..8)
     constexpr std::array<std::pair<float, float>, 10> knobCoords = {{
         { 0.8490f, 0.2054f }, { 0.9175f, 0.2087f },
         { 0.8496f, 0.3413f }, { 0.9181f, 0.3424f },
@@ -2442,6 +2757,71 @@ void NeomorphX1AudioProcessorEditor::resized()
         placeSeqKnob (stepSeqControls.gateKnob,   0);
         placeSeqKnob (stepSeqControls.swingKnob,  1);
         placeSeqKnob (stepSeqControls.amountKnob, 2);
+    }
+
+    // 13. Tab 6: Mod Matrix & LFO 1 Layout
+    {
+        const float leftPx  = oscPanelX[0] * w;
+        const float rightPx = oscPanelX[1] * w;
+
+        const float slotStartY = panelY + panelH * 0.16f;
+        const float slotStepY  = panelH * 0.205f;
+        const float slotH      = panelH * 0.155f;
+        const float amtSize    = slotH * 1.15f;
+        const float boxW       = (panelW - 34.0f - amtSize) * 0.5f;
+
+        for (size_t m = 0; m < 4; ++m)
+        {
+            auto& slot = modMatrixControls.slots[m];
+            const float rowY = slotStartY + static_cast<float> (m) * slotStepY;
+
+            slot.srcBox.setBounds (
+                juce::roundToInt (leftPx + 10.0f),
+                juce::roundToInt (rowY),
+                juce::roundToInt (boxW),
+                juce::roundToInt (slotH)
+            );
+
+            slot.dstBox.setBounds (
+                juce::roundToInt (leftPx + 16.0f + boxW),
+                juce::roundToInt (rowY),
+                juce::roundToInt (boxW),
+                juce::roundToInt (slotH)
+            );
+
+            slot.amtKnob.setBounds (
+                juce::roundToInt (leftPx + panelW - 10.0f - amtSize),
+                juce::roundToInt (rowY + (slotH - amtSize) * 0.5f),
+                juce::roundToInt (amtSize),
+                juce::roundToInt (amtSize)
+            );
+        }
+
+        const float dropH = panelH * 0.13f;
+        modMatrixControls.lfoSyncBox.setBounds (
+            juce::roundToInt (rightPx + 82.0f),
+            juce::roundToInt (panelY + panelH * 0.18f),
+            juce::roundToInt (panelW - 92.0f),
+            juce::roundToInt (dropH)
+        );
+
+        const float lfoKnobSize = 0.041f * w;
+        const float lfoKnobY    = panelY + 0.158f * h;
+
+        auto placeLfoKnob = [rightPx, panelW, lfoKnobSize, lfoKnobY] (juce::Slider& k, int col)
+        {
+            const float cx = rightPx + panelW * (0.20f + static_cast<float> (col) * 0.30f);
+            k.setBounds (
+                juce::roundToInt (cx - lfoKnobSize * 0.5f),
+                juce::roundToInt (lfoKnobY - lfoKnobSize * 0.5f),
+                juce::roundToInt (lfoKnobSize),
+                juce::roundToInt (lfoKnobSize)
+            );
+        };
+
+        placeLfoKnob (modMatrixControls.lfoRateKnob,  0);
+        placeLfoKnob (modMatrixControls.lfoFadeKnob,  1);
+        placeLfoKnob (modMatrixControls.lfoDepthKnob, 2);
     }
 }
 

@@ -99,6 +99,21 @@ public:
         std::array<std::atomic<float>*, 16> stepGate {};
     };
 
+    struct LfoParamPointers
+    {
+        std::atomic<float>* sync  = nullptr;
+        std::atomic<float>* rate  = nullptr;
+        std::atomic<float>* fade  = nullptr;
+        std::atomic<float>* depth = nullptr;
+    };
+
+    struct ModSlotParamPointers
+    {
+        std::atomic<float>* src    = nullptr;
+        std::atomic<float>* dst    = nullptr;
+        std::atomic<float>* amount = nullptr;
+    };
+
     struct SceneParamPointers
     {
         std::array<OscParamPointers, 2> oscs;
@@ -106,6 +121,8 @@ public:
         std::array<EnvParamPointers, 2> envs; // 0 = Amp EG, 1 = Filter/Mod EG
         FreeEgParamPointers freeEg;
         StepSeqParamPointers stepSeq;
+        LfoParamPointers lfo1;
+        std::array<ModSlotParamPointers, 4> modSlots;
     };
 
     struct EngineParamCache
@@ -116,15 +133,22 @@ public:
         std::atomic<float>* scene2Level = nullptr;
         std::atomic<float>* pitchWheel  = nullptr;
         std::atomic<float>* modWheel    = nullptr;
-        std::array<std::atomic<float>*, 10> matrixKnobs {};
+        std::array<std::atomic<float>*, 10> matrixKnobs {}; // [0]=Master Vol, [1]=Master Pan, [2..9]=Assign 1..8
         std::atomic<float> currentBpm { 120.0f };
         mutable std::array<std::atomic<int>, 2> activeSeqStep { -1, -1 };
+        mutable std::array<std::atomic<float>, 2> liveLfoOut { 0.0f, 0.0f };
     };
 
     int getCurrentSeqStep (int scene) const noexcept
     {
         const size_t idx = (scene == 2) ? 1 : 0;
         return paramCache.activeSeqStep[idx].load();
+    }
+
+    float getLiveLfoValue (int scene) const noexcept
+    {
+        const size_t idx = (scene == 2) ? 1 : 0;
+        return paramCache.liveLfoOut[idx].load();
     }
 
     juce::AudioProcessorValueTreeState apvts;

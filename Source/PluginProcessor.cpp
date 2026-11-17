@@ -35,16 +35,16 @@ namespace
 
                 switch (mode)
                 {
-                    case 0: // LP 12dB
-                    case 1: // LP 24dB
+                    case 0:
+                    case 1:
                         return v2;
-                    case 2: // BP 12dB
+                    case 2:
                         return v1;
-                    case 3: // HP 12dB
+                    case 3:
                         return v0 - k * v1 - v2;
-                    case 4: // Notch
+                    case 4:
                         return v0 - k * v1;
-                    default: // Comb / Formant
+                    default:
                         return 0.65f * v1 + 0.35f * (v0 - v2);
                 }
             };
@@ -61,7 +61,7 @@ namespace
 
         switch (waveType)
         {
-            case 0: // Basic Analog
+            case 0:
             {
                 const float sine = std::sin (t * juce::MathConstants<float>::twoPi);
                 const float tri  = 1.0f - 4.0f * std::abs (std::round (t - 0.25f) - (t - 0.25f));
@@ -76,26 +76,26 @@ namespace
                     sample = juce::jmap ((pos - 0.66f) / 0.34f, saw, sqr);
                 break;
             }
-            case 1: // PWM / Pulse
+            case 1:
             {
                 const float pw = juce::jmap (pos, 0.08f, 0.92f);
                 sample = (t < pw) ? 0.85f : -0.85f;
                 break;
             }
-            case 2: // Formant
+            case 2:
             {
                 const float harmonic = 2.0f + pos * 7.0f;
                 const float window   = std::sin (t * juce::MathConstants<float>::pi);
                 sample = std::sin (t * juce::MathConstants<float>::twoPi * harmonic) * window;
                 break;
             }
-            case 3: // Digital Fold
+            case 3:
             {
                 const float driven = std::sin (t * juce::MathConstants<float>::twoPi) * (1.0f + pos * 3.5f);
                 sample = std::sin (driven * juce::MathConstants<float>::halfPi);
                 break;
             }
-            case 4: // SuperSaw
+            case 4:
             {
                 const float s1 = 2.0f * t - 1.0f;
                 const float s2 = 2.0f * std::fmod (t * 1.012f + 0.17f, 1.0f) - 1.0f;
@@ -103,7 +103,7 @@ namespace
                 sample = s1 * (1.0f - pos * 0.45f) + (s2 + s3) * (pos * 0.34f);
                 break;
             }
-            default: // Vocal Morph
+            default:
             {
                 sample = 0.6f * std::sin (t * juce::MathConstants<float>::twoPi)
                        + 0.4f * std::cos (t * juce::MathConstants<float>::twoPi * (2.0f + pos * 5.0f));
@@ -123,7 +123,7 @@ namespace
     {
         const int target = static_cast<int> (feg.target->load());
         const float amt  = feg.amount->load();
-        if (target == 0 || std::abs (amt) < 0.0001f)
+        if (target == 0 && std::abs (amt) < 0.0001f)
             return 0.0f;
 
         const int mode = static_cast<int> (feg.mode->load());
@@ -248,6 +248,9 @@ namespace
                 state.seqGateOpen    = (scParams.stepSeq.stepGate[0]->load() > 0.5f);
                 state.seqSmoothedVal = scParams.stepSeq.stepVal[0]->load();
 
+                state.lfoPhase    = 0.0f;
+                state.lfoFadeGain = (scParams.lfo1.fade->load() <= 0.005f) ? 1.0f : 0.0f;
+
                 cache.activeSeqStep[s].store (0);
 
                 updateEnvelopeParams (s);
@@ -278,6 +281,7 @@ namespace
                     sceneStates[s].modEnv.reset();
                     sceneStates[s].freeEgReleased = true;
                     cache.activeSeqStep[s].store (-1);
+                    cache.liveLfoOut[s].store (0.0f);
                 }
                 clearCurrentNote();
             }
@@ -314,34 +318,63 @@ namespace
             auto* outL = outputBuffer.getWritePointer (0);
             auto* outR = outputBuffer.getNumChannels() > 1 ? outputBuffer.getWritePointer (1) : nullptr;
 
-            constexpr int   seqLengths[3]   = { 8, 12, 16 };
-            constexpr float seqBeatDivs[6]  = { 1.0f, 0.5f, 0.75f, 0.25f, 1.0f / 6.0f, 0.125f };
+            constexpr int   seqLengths[3]  = { 8, 12, 16 };
+            constexpr float seqBeatDivs[6] = { 1.0f, 0.5f, 0.75f, 0.25f, 1.0f / 6.0f, 0.125f };
+            constexpr float lfoBeatDivs[6] = { 1.0f, 4.0f, 2.0f, 1.0f, 0.5f, 0.25f };
 
             for (int sampleIdx = 0; sampleIdx < numSamples; ++sampleIdx)
             {
-                std::array<float, 2> fegModVal { 0.0f, 0.0f };
+                std::array<float, 2> ampEnvArr { 0.0f, 0.0f };
+                std::array<float, 2> modEnvArr { 0.0f, 0.0f };
+                std::array<float, 2> fegRawVal { 0.0f, 0.0f };
                 std::array<int, 2>   fegTarget { 0, 0 };
-                std::array<float, 2> seqModVal { 0.0f, 0.0f };
+                std::array<float, 2> seqRawVal { 0.0f, 0.0f };
                 std::array<int, 2>   seqMode   { 0, 0 };
+                std::array<float, 2> lfoSine   { 0.0f, 0.0f };
+                std::array<float, 2> lfoTri    { 0.0f, 0.0f };
+                std::array<float, 2> lfoSaw    { 0.0f, 0.0f };
+                std::array<float, 2> lfoRateMod { 0.0f, 0.0f };
+
                 float morphModOffset = 0.0f;
+
+                // Vorab Mod-Matrix auf LFO-Rate prüfen
+                for (size_t s = 0; s < 2; ++s)
+                {
+                    const auto& scP = cache.scenes[s];
+                    for (size_t m = 0; m < 4; ++m)
+                    {
+                        if (static_cast<int> (scP.modSlots[m].dst->load()) == 12) // LFO 1 Rate
+                        {
+                            const int srcIdx = static_cast<int> (scP.modSlots[m].src->load());
+                            if (srcIdx >= 11 && srcIdx <= 18) // Assign 1..8 (knobs 3..10)
+                            {
+                                const float knobV = cache.matrixKnobs[static_cast<size_t> (srcIdx - 9)]->load();
+                                lfoRateMod[s] += knobV * scP.modSlots[m].amount->load();
+                            }
+                        }
+                    }
+                }
 
                 for (size_t s = 0; s < 2; ++s)
                 {
                     auto& state     = sceneStates[s];
                     const auto& scP = cache.scenes[s];
 
-                    // 1. Free EG auswerten
+                    ampEnvArr[s] = state.ampEnv.getNextSample();
+                    modEnvArr[s] = state.modEnv.getNextSample();
+
+                    // 1. Free EG
                     fegTarget[s] = static_cast<int> (scP.freeEg.target->load());
-                    fegModVal[s] = evaluateFreeEg (scP.freeEg,
+                    fegRawVal[s] = evaluateFreeEg (scP.freeEg,
                                                    state.freeEgPhase,
                                                    state.freeEgSmoothed,
                                                    state.freeEgReleased,
                                                    state.freeEgDir,
                                                    sr, hostBpm);
                     if (fegTarget[s] == 5)
-                        morphModOffset += fegModVal[s] * 0.5f;
+                        morphModOffset += fegRawVal[s] * 0.5f;
 
-                    // 2. Step Sequencer auswerten
+                    // 2. Step Sequencer
                     seqMode[s] = static_cast<int> (scP.stepSeq.mode->load());
                     if (seqMode[s] > 0)
                     {
@@ -354,7 +387,6 @@ namespace
                         const float stepSec = (60.0f / hostBpm) * seqBeatDivs[rateIdx];
                         state.seqPhase += 1.0f / juce::jmax (1.0f, stepSec * static_cast<float> (sr));
 
-                        // Swing verschiebt ungerade Steps leicht nach hinten
                         const float swingOffset = ((state.seqCurrentStep % 2) == 1) ? (swing * 0.35f) : 0.0f;
                         const float effectivePhase = state.seqPhase - swingOffset;
 
@@ -368,7 +400,7 @@ namespace
                             if (noteIsHeld && stepActive)
                             {
                                 state.seqGateOpen = true;
-                                if (seqMode[s] == 1) // Pitch-Mode retriggert Hüllkurven pro Step
+                                if (seqMode[s] == 1)
                                 {
                                     state.ampEnv.noteOn();
                                     state.modEnv.noteOn();
@@ -380,7 +412,6 @@ namespace
                             }
                         }
 
-                        // Gate-Schließung innerhalb des Steps (im Pitch-Mode)
                         if (seqMode[s] == 1 && state.seqGateOpen && effectivePhase >= gateLen)
                         {
                             state.seqGateOpen = false;
@@ -392,17 +423,117 @@ namespace
                         const bool active  = (scP.stepSeq.stepGate[stIdx]->load() > 0.5f);
                         const float targetStepVal = active ? scP.stepSeq.stepVal[stIdx]->load() : 0.0f;
 
-                        // Glide / Smoothing zwischen den Steps
                         const float glideCoeff = (seqMode[s] == 1)
                                                      ? (1.0f - std::pow (amt, 0.25f) * 0.996f)
                                                      : 0.02f;
                         state.seqSmoothedVal += glideCoeff * (targetStepVal - state.seqSmoothedVal);
 
-                        seqModVal[s] = (seqMode[s] == 1) ? state.seqSmoothedVal
+                        seqRawVal[s] = (seqMode[s] == 1) ? state.seqSmoothedVal
                                                          : (state.seqSmoothedVal * amt);
 
-                        if (seqMode[s] == 4) // Ziel: Scene Morph
-                            morphModOffset += seqModVal[s] * 0.5f;
+                        if (seqMode[s] == 4)
+                            morphModOffset += seqRawVal[s] * 0.5f;
+                    }
+
+                    // 3. LFO 1
+                    const int lfoSync  = static_cast<int> (scP.lfo1.sync->load());
+                    const float fadeT  = scP.lfo1.fade->load();
+                    const float depth  = scP.lfo1.depth->load();
+
+                    float lfoFreqHz = scP.lfo1.rate->load() * std::pow (2.0f, lfoRateMod[s] * 3.0f);
+                    if (lfoSync > 0 && hostBpm > 1.0f)
+                    {
+                        const float periodSec = (60.0f / hostBpm) * lfoBeatDivs[juce::jlimit (0, 5, lfoSync)];
+                        lfoFreqHz = 1.0f / juce::jmax (0.005f, periodSec);
+                    }
+
+                    state.lfoPhase += lfoFreqHz / static_cast<float> (sr);
+                    if (state.lfoPhase >= 1.0f)
+                        state.lfoPhase -= std::floor (state.lfoPhase);
+
+                    if (fadeT > 0.005f)
+                        state.lfoFadeGain = juce::jmin (1.0f, state.lfoFadeGain + 1.0f / (fadeT * static_cast<float> (sr)));
+                    else
+                        state.lfoFadeGain = 1.0f;
+
+                    const float envLfo = state.lfoFadeGain * depth;
+                    const float p      = state.lfoPhase;
+
+                    lfoSine[s] = std::sin (p * juce::MathConstants<float>::twoPi) * envLfo;
+                    lfoTri[s]  = (1.0f - 4.0f * std::abs (std::round (p - 0.25f) - (p - 0.25f))) * envLfo;
+                    lfoSaw[s]  = (2.0f * p - 1.0f) * envLfo;
+
+                    if (sampleIdx == 0)
+                        cache.liveLfoOut[s].store (lfoSine[s]);
+                }
+
+                // Mod-Matrix für beide Scenes auswerten
+                struct SceneModAccum
+                {
+                    float cutoffOct = 0.0f;
+                    float resonance = 0.0f;
+                    float osc1Semi  = 0.0f;
+                    float osc2Semi  = 0.0f;
+                    float osc1Pos   = 0.0f;
+                    float osc2Pos   = 0.0f;
+                    float oscMorph  = 0.0f;
+                    float osc1Lvl   = 0.0f;
+                    float osc2Lvl   = 0.0f;
+                };
+                std::array<SceneModAccum, 2> matMod {};
+
+                const float keyNorm = (static_cast<float> (currentMidiNote) - 60.0f) / 36.0f;
+
+                for (size_t s = 0; s < 2; ++s)
+                {
+                    const auto& scP = cache.scenes[s];
+                    for (size_t m = 0; m < 4; ++m)
+                    {
+                        const int srcIdx = static_cast<int> (scP.modSlots[m].src->load());
+                        const int dstIdx = static_cast<int> (scP.modSlots[m].dst->load());
+                        const float amt  = scP.modSlots[m].amount->load();
+
+                        if (srcIdx == 0 || dstIdx == 0 || std::abs (amt) < 0.0001f)
+                            continue;
+
+                        float srcVal = 0.0f;
+                        switch (srcIdx)
+                        {
+                            case 1:  srcVal = lfoSine[s]; break;
+                            case 2:  srcVal = lfoTri[s];  break;
+                            case 3:  srcVal = lfoSaw[s];  break;
+                            case 4:  srcVal = modWheel;   break;
+                            case 5:  srcVal = noteVelocity; break;
+                            case 6:  srcVal = keyNorm;    break;
+                            case 7:  srcVal = ampEnvArr[s]; break;
+                            case 8:  srcVal = modEnvArr[s]; break;
+                            case 9:  srcVal = fegRawVal[s]; break;
+                            case 10: srcVal = seqRawVal[s]; break;
+                            default:
+                                if (srcIdx >= 11 && srcIdx <= 18) // Assign 1..8 = matrixKnobs[2..9]
+                                    srcVal = cache.matrixKnobs[static_cast<size_t> (srcIdx - 9)]->load();
+                                break;
+                        }
+
+                        const float modVal = srcVal * amt;
+                        auto& acc = matMod[s];
+
+                        switch (dstIdx)
+                        {
+                            case 1:  acc.cutoffOct += modVal * 4.5f;  break; // Filter Cutoff
+                            case 2:  acc.resonance += modVal * 0.85f; break; // Filter Resonance
+                            case 3:  acc.osc1Semi  += modVal * 12.0f; break; // Osc 1 Pitch
+                            case 4:  acc.osc2Semi  += modVal * 12.0f; break; // Osc 2 Pitch
+                            case 5:  acc.osc1Semi  += modVal * 12.0f;
+                                     acc.osc2Semi  += modVal * 12.0f; break; // Osc 1+2 Pitch
+                            case 6:  acc.osc1Pos   += modVal;         break; // Osc 1 Position
+                            case 7:  acc.osc2Pos   += modVal;         break; // Osc 2 Position
+                            case 8:  acc.oscMorph  += modVal;         break; // Osc 1+2 Morph
+                            case 9:  acc.osc1Lvl   += modVal;         break; // Osc 1 Level
+                            case 10: acc.osc2Lvl   += modVal;         break; // Osc 2 Level
+                            case 11: morphModOffset += modVal * 0.5f; break; // Scene Morph
+                            default: break;
+                        }
                     }
                 }
 
@@ -417,18 +548,16 @@ namespace
                 {
                     auto& state     = sceneStates[s];
                     const auto& scP = cache.scenes[s];
+                    const auto& acc = matMod[s];
 
-                    const float ampEnvVal = state.ampEnv.getNextSample();
-                    const float modEnvVal = state.modEnv.getNextSample();
+                    const float fegPosMod   = (fegTarget[s] == 2) ? fegRawVal[s] : 0.0f;
+                    const float fegMorphMod = (fegTarget[s] == 3) ? fegRawVal[s] : 0.0f;
+                    const float fegPitchMod = (fegTarget[s] == 4) ? (fegRawVal[s] * 12.0f) : 0.0f;
+                    const float fegCutMod   = (fegTarget[s] == 1) ? (fegRawVal[s] * 4.0f)  : 0.0f;
 
-                    const float fegPosMod   = (fegTarget[s] == 2) ? fegModVal[s] : 0.0f;
-                    const float fegMorphMod = (fegTarget[s] == 3) ? fegModVal[s] : 0.0f;
-                    const float fegPitchMod = (fegTarget[s] == 4) ? (fegModVal[s] * 12.0f) : 0.0f;
-                    const float fegCutMod   = (fegTarget[s] == 1) ? (fegModVal[s] * 4.0f)  : 0.0f;
-
-                    const float seqPitchMod = (seqMode[s] == 1) ? (seqModVal[s] * 12.0f) : 0.0f;
-                    const float seqCutMod   = (seqMode[s] == 2) ? (seqModVal[s] * 4.0f)  : 0.0f;
-                    const float seqPosMod   = (seqMode[s] == 3) ? seqModVal[s]           : 0.0f;
+                    const float seqPitchMod = (seqMode[s] == 1) ? (seqRawVal[s] * 12.0f) : 0.0f;
+                    const float seqCutMod   = (seqMode[s] == 2) ? (seqRawVal[s] * 4.0f)  : 0.0f;
+                    const float seqPosMod   = (seqMode[s] == 3) ? seqRawVal[s]           : 0.0f;
 
                     float osc1L = 0.0f, osc1R = 0.0f;
                     float osc2L = 0.0f, osc2R = 0.0f;
@@ -440,13 +569,19 @@ namespace
                         const float oct  = oscP.octave->load();
                         const float semi = oscP.semi->load();
                         const float det  = oscP.detune->load() * 0.01f;
-                        const float pos  = juce::jlimit (0.0f, 1.0f, oscP.position->load() + fegPosMod + seqPosMod);
-                        const float mrph = juce::jlimit (0.0f, 1.0f, oscP.morph->load() + modWheel * 0.35f + fegMorphMod);
+
+                        const float slotPosMod   = (o == 0) ? acc.osc1Pos  : acc.osc2Pos;
+                        const float slotPitchMod = (o == 0) ? acc.osc1Semi : acc.osc2Semi;
+                        const float slotLvlMod   = (o == 0) ? acc.osc1Lvl  : acc.osc2Lvl;
+
+                        const float pos  = juce::jlimit (0.0f, 1.0f, oscP.position->load() + fegPosMod + seqPosMod + slotPosMod);
+                        const float mrph = juce::jlimit (0.0f, 1.0f, oscP.morph->load() + modWheel * 0.35f + fegMorphMod + acc.oscMorph);
                         const float pan  = oscP.pan->load();
-                        const float lvl  = oscP.level->load();
+                        const float lvl  = juce::jlimit (0.0f, 1.25f, oscP.level->load() + slotLvlMod);
 
                         const float notePitch = static_cast<float> (currentMidiNote)
-                                              + (oct * 12.0f) + semi + det + totalPitchSemi + fegPitchMod + seqPitchMod;
+                                              + (oct * 12.0f) + semi + det + totalPitchSemi
+                                              + fegPitchMod + seqPitchMod + slotPitchMod;
                         const float freqHz = 440.0f * std::pow (2.0f, (notePitch - 69.0f) / 12.0f);
 
                         state.oscPhase[o] += freqHz / static_cast<float> (sr);
@@ -498,7 +633,7 @@ namespace
                     if (fltRouting != 2)
                     {
                         const float baseCut  = scP.filter.cutoff->load();
-                        const float res      = scP.filter.resonance->load();
+                        const float res      = juce::jlimit (0.0f, 0.98f, scP.filter.resonance->load() + acc.resonance);
                         const float drive    = scP.filter.drive->load();
                         const float envAmt   = scP.filter.envAmt->load();
                         const float keytrack = scP.filter.keytrack->load();
@@ -512,9 +647,9 @@ namespace
                         }
 
                         const float keyOctaves = ((static_cast<float> (currentMidiNote) - 60.0f) / 12.0f) * keytrack;
-                        const float envOctaves = modEnvVal * envAmt * 5.0f;
+                        const float envOctaves = modEnvArr[s] * envAmt * 5.0f;
                         const float velOctaves = (noteVelocity - 0.5f) * velSens * 3.0f;
-                        const float modOctaves = modWheel * 2.5f + fegCutMod + seqCutMod;
+                        const float modOctaves = modWheel * 2.5f + fegCutMod + seqCutMod + acc.cutoffOct;
 
                         const float modCut = baseCut * std::pow (2.0f, keyOctaves + envOctaves + velOctaves + modOctaves);
 
@@ -524,7 +659,7 @@ namespace
                     }
 
                     const float sceneWeight = (s == 0) ? weight1 : weight2;
-                    const float voiceGain   = ampEnvVal * noteVelocity * sceneWeight * 0.28f;
+                    const float voiceGain   = ampEnvArr[s] * noteVelocity * sceneWeight * 0.34f;
 
                     mixL += (fltInL + bypassL) * voiceGain;
                     mixR += (fltInR + bypassR) * voiceGain;
@@ -539,6 +674,8 @@ namespace
                 {
                     cache.activeSeqStep[0].store (-1);
                     cache.activeSeqStep[1].store (-1);
+                    cache.liveLfoOut[0].store (0.0f);
+                    cache.liveLfoOut[1].store (0.0f);
                     clearCurrentNote();
                     break;
                 }
@@ -563,6 +700,9 @@ namespace
             int   seqCurrentStep = 0;
             bool  seqGateOpen    = true;
             float seqSmoothedVal = 0.0f;
+
+            float lfoPhase    = 0.0f;
+            float lfoFadeGain = 1.0f;
         };
 
         void updateEnvelopeParams (size_t sceneIdx)
@@ -698,6 +838,20 @@ void NeomorphX1AudioProcessor::cacheParameterPointers()
             sc.stepSeq.stepVal[st]  = apvts.getRawParameterValue (seqp + "st" + stStr + "_v");
             sc.stepSeq.stepGate[st] = apvts.getRawParameterValue (seqp + "st" + stStr + "_g");
         }
+
+        const auto lfop = scenePrefix + "lfo1_";
+        sc.lfo1.sync  = apvts.getRawParameterValue (lfop + "sync");
+        sc.lfo1.rate  = apvts.getRawParameterValue (lfop + "rate");
+        sc.lfo1.fade  = apvts.getRawParameterValue (lfop + "fade");
+        sc.lfo1.depth = apvts.getRawParameterValue (lfop + "depth");
+
+        for (size_t m = 0; m < 4; ++m)
+        {
+            const auto mp = scenePrefix + "mod" + juce::String (static_cast<int> (m + 1)) + "_";
+            sc.modSlots[m].src    = apvts.getRawParameterValue (mp + "src");
+            sc.modSlots[m].dst    = apvts.getRawParameterValue (mp + "dst");
+            sc.modSlots[m].amount = apvts.getRawParameterValue (mp + "amt");
+        }
     }
 }
 
@@ -705,13 +859,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    // 1. 10 Matrix-Drehregler (rechts)
+    // 1. 10 rechte Drehregler: [0] = Master Volume (80%), [1] = Master Pan (50%), [2..9] = Assign 1..8
     const juce::StringArray knobNames = {
+        "Master Volume", "Master Pan",
         "Assign 1", "Assign 2",
         "Assign 3", "Assign 4",
         "Assign 5", "Assign 6",
-        "Assign 7", "Assign 8",
-        "Assign 9", "Assign 10"
+        "Assign 7", "Assign 8"
     };
 
     constexpr std::array<float, 10> knobDefaults = {
@@ -733,7 +887,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
         ));
     }
 
-    // 2. 3 Scene-Fader (unten links/mitte)
+    // 2. 3 Scene-Fader
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "scene_1", 1 }, "Scene 1",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.8f));
@@ -746,7 +900,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
         juce::ParameterID { "scene_2", 1 }, "Scene 2",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.8f));
 
-    // 3. Pitch- & Mod-Wheel (unten links)
+    // 3. Pitch- & Mod-Wheel
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "pitch_wheel", 1 }, "Pitch Wheel",
         juce::NormalisableRange<float> (-1.0f, 1.0f, 0.001f), 0.0f));
@@ -755,7 +909,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
         juce::ParameterID { "mod_wheel", 1 }, "Mod Wheel",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f));
 
-    // 4. Dual-Scene Parameter (s1_ & s2_ für SCENE 1 und SCENE 2)
+    // 4. Dual-Scene Parameter (s1_ & s2_)
     const juce::StringArray waveforms = {
         "Basic Analog", "PWM / Pulse", "Formant", "Digital Fold", "SuperSaw", "Vocal Morph"
     };
@@ -765,17 +919,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
         const auto scenePrefix = "s" + juce::String (scene) + "_";
         const auto sceneLabel  = "S" + juce::String (scene) + " ";
 
-        // 4a. Oscillators Tab (osc1 & osc2)
+        // 4a. Oscillators Tab
         for (int osc = 1; osc <= 2; ++osc)
         {
             const auto prefix = scenePrefix + "osc" + juce::String (osc) + "_";
             const auto label  = sceneLabel + "Osc " + juce::String (osc) + " ";
 
-            int defaultWave = 0;
-            if (scene == 1)
-                defaultWave = (osc == 1) ? 0 : 1;
-            else
-                defaultWave = (osc == 1) ? 2 : 5;
+            int defaultWave = (scene == 1) ? ((osc == 1) ? 0 : 1)
+                                           : ((osc == 1) ? 2 : 5);
 
             params.push_back (std::make_unique<juce::AudioParameterChoice> (
                 juce::ParameterID { prefix + "wave", 1 }, label + "Wavetable",
@@ -817,7 +968,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
                 osc == 1 ? 0.85f : 0.65f));
         }
 
-        // 4b. Envelopes Tab (env1 = Amp EG, env2 = Filter/Mod EG)
+        // 4b. Envelopes Tab
         const char* envNames[2] = { "Amp Env ", "Filter Env " };
         for (int env = 1; env <= 2; ++env)
         {
@@ -954,7 +1105,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
                 defLevels[static_cast<size_t> (pt)]));
         }
 
-        // 4e. Step Sequencer Tab (s1_seq_* & s2_seq_*)
+        // 4e. Step Sequencer Tab
         const auto seqPrefix = scenePrefix + "seq_";
         const auto seqLabel  = sceneLabel + "Step Seq ";
 
@@ -974,11 +1125,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
 
         params.push_back (std::make_unique<juce::AudioParameterChoice> (
             juce::ParameterID { seqPrefix + "length", 1 }, seqLabel + "Length",
-            seqLengths, 2)); // 16 Steps
+            seqLengths, 2));
 
         params.push_back (std::make_unique<juce::AudioParameterChoice> (
             juce::ParameterID { seqPrefix + "rate", 1 }, seqLabel + "Rate",
-            seqRates, 3)); // 1/16 Note
+            seqRates, 3));
 
         params.push_back (std::make_unique<juce::AudioParameterFloat> (
             juce::ParameterID { seqPrefix + "gate", 1 }, seqLabel + "Gate",
@@ -992,7 +1143,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
             juce::ParameterID { seqPrefix + "amount", 1 }, seqLabel + "Amount / Glide",
             juce::NormalisableRange<float> (0.00f, 1.00f, 0.01f), 0.25f));
 
-        // Klassisches Synthwave-Oktav/Quinten-Pattern als Default-Kurve
         constexpr std::array<float, 16> defSteps = {
             0.0f, 0.0f, 1.0f, 0.0f,  0.5833f, 0.0f, 1.0f, 0.4167f,
             0.0f, 0.0f, 1.0f, 0.0f, -0.1667f, 0.0f, 0.5833f, 0.8333f
@@ -1011,6 +1161,72 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
                 juce::ParameterID { seqPrefix + "st" + stStr + "_g", 1 },
                 seqLabel + "Gate " + stStr,
                 true));
+        }
+
+        // 4f. Mod Matrix & LFO 1 Tab
+        const auto lfoPrefix = scenePrefix + "lfo1_";
+        const auto lfoLabel  = sceneLabel + "LFO 1 ";
+
+        const juce::StringArray lfoSyncItems = {
+            "Free (Hz)", "1/1 Bar", "1/2 Note", "1/4 Note", "1/8 Note", "1/16 Note"
+        };
+
+        params.push_back (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { lfoPrefix + "sync", 1 }, lfoLabel + "Sync",
+            lfoSyncItems, 0));
+
+        params.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { lfoPrefix + "rate", 1 }, lfoLabel + "Rate",
+            juce::NormalisableRange<float> (0.05f, 20.0f, 0.01f, 0.35f),
+            (scene == 1) ? 3.50f : 0.45f));
+
+        params.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { lfoPrefix + "fade", 1 }, lfoLabel + "Fade In",
+            juce::NormalisableRange<float> (0.0f, 4.0f, 0.01f, 0.45f), 0.0f));
+
+        params.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { lfoPrefix + "depth", 1 }, lfoLabel + "Depth",
+            juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 1.0f));
+
+        const juce::StringArray modSources = {
+            "Off",
+            "LFO 1 (Sine)", "LFO 1 (Tri)", "LFO 1 (Saw)",
+            "Mod Wheel", "Velocity", "Keytrack",
+            "Amp EG", "Mod EG", "Free EG", "Step Seq",
+            "Assign 1", "Assign 2", "Assign 3", "Assign 4",
+            "Assign 5", "Assign 6", "Assign 7", "Assign 8"
+        };
+
+        const juce::StringArray modDestinations = {
+            "Off",
+            "Filter Cutoff", "Filter Resonance",
+            "Osc 1 Pitch", "Osc 2 Pitch", "Osc 1+2 Pitch",
+            "Osc 1 Position", "Osc 2 Position", "Osc 1+2 Morph",
+            "Osc 1 Level", "Osc 2 Level",
+            "Scene Morph", "LFO 1 Rate"
+        };
+
+        for (int m = 0; m < 4; ++m)
+        {
+            const auto mp = scenePrefix + "mod" + juce::String (m + 1) + "_";
+            const auto ml = sceneLabel + "Mod " + juce::String (m + 1) + " ";
+
+            // Slot 1 sinnvoll vorbelegen (Mod Wheel -> Osc 1+2 Pitch Vibrato bei S1, Assign 1 -> Filter Cutoff bei S2)
+            const int defSrc = (m == 0) ? ((scene == 1) ? 4 : 11) : 0;
+            const int defDst = (m == 0) ? ((scene == 1) ? 5 : 1)  : 0;
+            const float defAmt = (m == 0 && scene == 2) ? 0.45f : 0.0f;
+
+            params.push_back (std::make_unique<juce::AudioParameterChoice> (
+                juce::ParameterID { mp + "src", 1 }, ml + "Source",
+                modSources, defSrc));
+
+            params.push_back (std::make_unique<juce::AudioParameterChoice> (
+                juce::ParameterID { mp + "dst", 1 }, ml + "Destination",
+                modDestinations, defDst));
+
+            params.push_back (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { mp + "amt", 1 }, ml + "Amount",
+                juce::NormalisableRange<float> (-1.0f, 1.0f, 0.01f), defAmt));
         }
     }
 
@@ -1089,7 +1305,10 @@ void NeomorphX1AudioProcessor::randomizeSceneParameters (int scene)
         if (auto* rangedParam = dynamic_cast<juce::RangedAudioParameter*> (param))
         {
             const auto id = rangedParam->getParameterID();
-            if (id.startsWith (prefix) && ! id.contains ("_feg_pt") && ! id.contains ("_seq_st"))
+            if (id.startsWith (prefix)
+                && ! id.contains ("_feg_pt")
+                && ! id.contains ("_seq_st")
+                && ! id.contains ("_mod"))
             {
                 if (id.endsWith ("_level"))
                     rangedParam->setValueNotifyingHost (rng.nextFloat() * 0.45f + 0.50f);
@@ -1232,7 +1451,26 @@ void NeomorphX1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
         }
     }
 
-    synth.renderNextBlock (buffer, midiMessages, 0, buffer.getNumSamples());
+    const int numSamples = buffer.getNumSamples();
+    synth.renderNextBlock (buffer, midiMessages, 0, numSamples);
+
+    // Master Volume (knob_1, Default 80%) & Master Panorama (knob_2, Default 50% = Center)
+    const float masterVol = paramCache.matrixKnobs[0]->load();
+    const float masterPan = paramCache.matrixKnobs[1]->load(); // 0.0 = L, 0.5 = Center, 1.0 = R
+
+    const float panAngle = masterPan * juce::MathConstants<float>::halfPi;
+    const float gainL    = masterVol * std::cos (panAngle) * 1.41421356f;
+    const float gainR    = masterVol * std::sin (panAngle) * 1.41421356f;
+
+    if (buffer.getNumChannels() >= 2)
+    {
+        buffer.applyGain (0, 0, numSamples, gainL);
+        buffer.applyGain (1, 0, numSamples, gainR);
+    }
+    else if (buffer.getNumChannels() == 1)
+    {
+        buffer.applyGain (0, 0, numSamples, masterVol);
+    }
 }
 
 bool NeomorphX1AudioProcessor::hasEditor() const

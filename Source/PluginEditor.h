@@ -195,6 +195,32 @@ private:
         explicit StepSeqControls (NeomorphX1AudioProcessorEditor& owner) : canvas (owner) {}
     };
 
+    struct ModSlotControls
+    {
+        juce::ComboBox srcBox;
+        juce::ComboBox dstBox;
+        juce::Slider   amtKnob;
+
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> srcAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> dstAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   amtAttachment;
+    };
+
+    struct ModMatrixControls
+    {
+        std::array<ModSlotControls, 4> slots;
+
+        juce::ComboBox lfoSyncBox;
+        juce::Slider   lfoRateKnob;
+        juce::Slider   lfoFadeKnob;
+        juce::Slider   lfoDepthKnob;
+
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoSyncAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   lfoRateAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   lfoFadeAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   lfoDepthAttachment;
+    };
+
     void timerCallback() override;
     void triggerLcdNotification (const juce::String& title, const juce::String& value);
 
@@ -206,6 +232,7 @@ private:
     void bindEnvelopeAttachments();
     void bindFreeEgAttachments();
     void bindStepSeqAttachments();
+    void bindModMatrixAttachments();
     void updateTabVisibility();
     void showSettingsMenu();
 
@@ -221,6 +248,8 @@ private:
                            juce::Rectangle<float> rightBounds);
     void drawStepSeqPanels (juce::Graphics& g, juce::Rectangle<float> leftBounds,
                             juce::Rectangle<float> rightBounds);
+    void drawModMatrixPanels (juce::Graphics& g, juce::Rectangle<float> leftBounds,
+                              juce::Rectangle<float> rightBounds);
 
     NeomorphX1AudioProcessor& audioProcessor;
     CyberpunkLookAndFeel cyberpunkLookAndFeel;
@@ -254,6 +283,7 @@ private:
     std::array<EnvelopeControls, 2> envControls;
     FreeEgControls freeEgControls { *this };
     StepSeqControls stepSeqControls { *this };
+    ModMatrixControls modMatrixControls;
 
     ActiveTab currentTab = ActiveTab::Oscillators;
 
@@ -262,6 +292,7 @@ private:
     bool showLcdNotify = false;
     int lcdNotifyTicks = 0;
     int lastPaintedSeqStep = -1;
+    float lastPaintedLfo   = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NeomorphX1AudioProcessorEditor)
 };
