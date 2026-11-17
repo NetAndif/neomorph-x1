@@ -360,6 +360,60 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
     tabImages[4] = juce::ImageCache::getFromMemory (BinaryData::tab_step_seq_png,    BinaryData::tab_step_seq_pngSize);
     tabImages[5] = juce::ImageCache::getFromMemory (BinaryData::tab_mod_matrix_png,  BinaryData::tab_mod_matrix_pngSize);
 
+    // --- Top-Bar Preset-Verwaltung ---
+    presetBox.setJustificationType (juce::Justification::centred);
+    presetBox.setTooltip ("Select Preset");
+    presetBox.onChange = [this]
+    {
+        if (suppressPresetBoxCallback)
+            return;
+
+        const auto selectedName = presetBox.getText();
+        if (selectedName.isNotEmpty() && audioProcessor.loadPresetByName (selectedName))
+        {
+            freeEgControls.canvas.repaint();
+            stepSeqControls.canvas.repaint();
+            triggerLcdNotification ("PRESET LOADED", selectedName);
+        }
+    };
+    addAndMakeVisible (presetBox);
+
+    savePresetButton.setButtonText ("SAVE");
+    savePresetButton.setTooltip ("Save Preset (Right-Click: Save As...)");
+    savePresetButton.setColour (juce::TextButton::buttonColourId, juce::Colour::fromRGB (16, 24, 38).withAlpha (0.85f));
+    savePresetButton.setColour (juce::TextButton::textColourOffId, juce::Colour::fromRGB (0, 240, 255));
+    savePresetButton.onClick = [this] { handleSavePresetClick (false); };
+    savePresetButton.onRightClick = [this] { handleSavePresetClick (true); };
+    addAndMakeVisible (savePresetButton);
+
+    loadPresetButton.setButtonText ("LOAD");
+    loadPresetButton.setTooltip ("Load / Import External Preset (.xml)");
+    loadPresetButton.setColour (juce::TextButton::buttonColourId, juce::Colour::fromRGB (16, 24, 38).withAlpha (0.85f));
+    loadPresetButton.setColour (juce::TextButton::textColourOffId, juce::Colour::fromRGB (185, 220, 245));
+    loadPresetButton.onClick = [this] { handleLoadPresetClick(); };
+    addAndMakeVisible (loadPresetButton);
+
+    panicButton.setButtonText ("PANIC");
+    panicButton.setTooltip ("All Notes Off & Reset Audio Engine");
+    panicButton.setColour (juce::TextButton::buttonColourId, juce::Colour::fromRGB (38, 14, 28).withAlpha (0.88f));
+    panicButton.setColour (juce::TextButton::textColourOffId, juce::Colour::fromRGB (255, 60, 180));
+    panicButton.onClick = [this] { handlePanicClick(); };
+    addAndMakeVisible (panicButton);
+
+    prevPresetButton.setAlpha (0.0f);
+    prevPresetButton.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    prevPresetButton.setTooltip ("Previous Preset");
+    prevPresetButton.onClick = [this] { stepPreset (-1); };
+    addAndMakeVisible (prevPresetButton);
+
+    nextPresetButton.setAlpha (0.0f);
+    nextPresetButton.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    nextPresetButton.setTooltip ("Next Preset");
+    nextPresetButton.onClick = [this] { stepPreset (1); };
+    addAndMakeVisible (nextPresetButton);
+
+    refreshPresetList();
+
     for (size_t i = 0; i < tabButtons.size(); ++i)
     {
         auto& btn = tabButtons[i];
@@ -397,8 +451,7 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
     settingsButton.onClick = [this] { showSettingsMenu(); };
     addAndMakeVisible (settingsButton);
 
-    // 10 rechte Drehregler:
-    // [0] = Master Volume (80%), [1] = Master Pan (50% = Center), [2..9] = Assign 1..8
+    // 10 rechte Drehregler: [0] = Master Volume (80%), [1] = Master Pan (50%), [2..9] = Assign 1..8
     for (size_t i = 0; i < matrixKnobs.size(); ++i)
     {
         auto& knob = matrixKnobs[i];
@@ -840,7 +893,7 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
     const juce::StringArray seqLengthItems = {
         "8 Steps", "12 Steps", "16 Steps"
     };
-    const juce::StringArray seqRateItems = {
+    const juce::StringArray seqRates = {
         "1/4 Note", "1/8 Note", "1/8 Dotted", "1/16 Note", "1/16 Triplet", "1/32 Note"
     };
 
@@ -881,7 +934,7 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
     };
     addChildComponent (stepSeqControls.lengthBox);
 
-    stepSeqControls.rateBox.addItemList (seqRateItems, 1);
+    stepSeqControls.rateBox.addItemList (seqRates, 1);
     stepSeqControls.rateBox.setJustificationType (juce::Justification::centredLeft);
     stepSeqControls.rateBox.onChange = [this, mirrorSeqParam]
     {
@@ -1051,7 +1104,6 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
     setupLfoKnob (modMatrixControls.lfoDepthKnob, "depth", "DEPTH",
         [] (double v) { return juce::String::formatted ("%d%%", juce::roundToInt (v * 100.0)); });
 
-    // Alle Attachments binden
     bindOscillatorAttachments();
     bindFilterAttachments();
     bindEnvelopeAttachments();
@@ -1079,9 +1131,141 @@ NeomorphX1AudioProcessorEditor::~NeomorphX1AudioProcessorEditor()
     setLookAndFeel (nullptr);
 }
 
+// ==============================================================================
+// Preset-Verwaltung UI-Logik
+// ==============================================================================
+void NeomorphX1AudioProcessorEditor::refreshPresetList()
+{
+    suppressPresetBoxCallback = true;
+
+    presetBox.clear (juce::dontSendNotification);
+    const auto presets = audioProcessor.getAvailablePresets();
+    const auto current = audioProcessor.getCurrentPresetName();
+
+    int matchId = 1;
+    for (int i = 0; i < presets.size(); ++i)
+    {
+        presetBox.addItem (presets[i], i + 1);
+        if (presets[i].equalsIgnoreCase (current))
+            matchId = i + 1;
+    }
+
+    presetBox.setSelectedId (matchId, juce::dontSendNotification);
+    if (presetBox.getText().isEmpty())
+        presetBox.setText (current, juce::dontSendNotification);
+
+    suppressPresetBoxCallback = false;
+}
+
+void NeomorphX1AudioProcessorEditor::handleSavePresetClick (bool forceSaveAsDialog)
+{
+    // Wenn das Preset bereits unter eigenem Namen gespeichert ist und kein "Save As" angefordert wurde: direkt überschreiben
+    if (! forceSaveAsDialog && audioProcessor.isCurrentPresetSaved())
+    {
+        const auto name = audioProcessor.getCurrentPresetName();
+        if (audioProcessor.savePreset (name))
+            triggerLcdNotification ("PRESET SAVED", name);
+        return;
+    }
+
+    auto* alert = new juce::AlertWindow ("NEOMORPH X1 // SAVE PRESET",
+                                         "Enter a name for the new preset:",
+                                         juce::MessageBoxIconType::NoIcon);
+
+    const auto suggestedName = audioProcessor.isCurrentPresetSaved()
+                                   ? (audioProcessor.getCurrentPresetName() + " Copy")
+                                   : "Neomorph Patch 01";
+
+    alert->addTextEditor ("presetName", suggestedName, "Preset Name:");
+    alert->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    alert->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+
+    alert->enterModalState (true,
+        juce::ModalCallbackFunction::create ([this, alert] (int result)
+        {
+            if (result == 1)
+            {
+                const auto newName = alert->getTextEditorContents ("presetName").trim();
+                if (newName.isNotEmpty() && ! newName.equalsIgnoreCase ("Init"))
+                {
+                    if (audioProcessor.savePreset (newName))
+                    {
+                        refreshPresetList();
+                        triggerLcdNotification ("PRESET SAVED", newName);
+                    }
+                }
+                else if (newName.equalsIgnoreCase ("Init"))
+                {
+                    triggerLcdNotification ("SAVE BLOCKED", "INIT IS PROTECTED");
+                }
+            }
+        }), true);
+}
+
+void NeomorphX1AudioProcessorEditor::handleLoadPresetClick()
+{
+    activeFileChooser = std::make_unique<juce::FileChooser> (
+        "Load Neomorph X1 Preset (.xml)",
+        audioProcessor.getPresetDirectory(),
+        "*.xml");
+
+    constexpr int flags = juce::FileBrowserComponent::openMode
+                        | juce::FileBrowserComponent::canSelectFiles;
+
+    activeFileChooser->launchAsync (flags, [this] (const juce::FileChooser& chooser)
+    {
+        const auto file = chooser.getResult();
+        if (! file.existsAsFile())
+            return;
+
+        const bool isOutsideLibrary = (file.getParentDirectory() != audioProcessor.getPresetDirectory());
+
+        if (audioProcessor.loadPresetFromFile (file, isOutsideLibrary))
+        {
+            refreshPresetList();
+            freeEgControls.canvas.repaint();
+            stepSeqControls.canvas.repaint();
+            triggerLcdNotification (isOutsideLibrary ? "PRESET IMPORTED" : "PRESET LOADED",
+                                    audioProcessor.getCurrentPresetName());
+        }
+        else
+        {
+            triggerLcdNotification ("LOAD ERROR", "INVALID XML FILE");
+        }
+    });
+}
+
+void NeomorphX1AudioProcessorEditor::handlePanicClick()
+{
+    audioProcessor.panicReset();
+    stepSeqControls.canvas.repaint();
+    triggerLcdNotification ("PANIC // RESET", "ALL VOICES CLEARED");
+}
+
+void NeomorphX1AudioProcessorEditor::stepPreset (int delta)
+{
+    const int numItems = presetBox.getNumItems();
+    if (numItems <= 0)
+        return;
+
+    int idx = presetBox.getSelectedItemIndex();
+    if (idx < 0)
+        idx = 0;
+
+    idx = (idx + delta + numItems) % numItems;
+    presetBox.setSelectedItemIndex (idx, juce::sendNotificationSync);
+}
+
 void NeomorphX1AudioProcessorEditor::timerCallback()
 {
     bool needsRepaint = false;
+
+    // Falls die DAW im Hintergrund via setStateInformation ein Projekt geladen hat, Dropdown synchron halten
+    if (presetBox.getText() != audioProcessor.getCurrentPresetName())
+    {
+        refreshPresetList();
+        needsRepaint = true;
+    }
 
     if (showLcdNotify && lcdNotifyTicks > 0)
     {
@@ -1520,6 +1704,7 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
 
     menu.addSectionHeader ("NEOMORPH X1 // SYSTEM");
     menu.addItem (1, "Init Full Patch (Reset)");
+    menu.addItem (5, "Open Presets Folder...");
     menu.addSeparator();
     menu.addItem (2, "Copy Scene 1 -> Scene 2");
     menu.addItem (3, "Copy Scene 2 -> Scene 1");
@@ -1545,8 +1730,8 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
         switch (result)
         {
             case 1:
-                for (auto* param : audioProcessor.getParameters())
-                    param->setValueNotifyingHost (param->getDefaultValue());
+                audioProcessor.loadInitPatch();
+                refreshPresetList();
                 freeEgControls.canvas.repaint();
                 stepSeqControls.canvas.repaint();
                 triggerLcdNotification ("SYSTEM", "INIT PATCH LOADED");
@@ -1568,6 +1753,9 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
                 freeEgControls.canvas.repaint();
                 stepSeqControls.canvas.repaint();
                 triggerLcdNotification ("SCENE SWAP", "S1 <-> S2 SWAPPED");
+                break;
+            case 5:
+                audioProcessor.getPresetDirectory().revealToUser();
                 break;
             case 10: setSize (896, 504);   break;
             case 11: setSize (1120, 630);  break;
@@ -1619,17 +1807,26 @@ void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rec
     auto topBar = screen.removeFromTop (17.0f);
 
     g.setColour (juce::Colour::fromRGB (130, 175, 205));
-    g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    g.setFont (juce::FontOptions (11.5f, juce::Font::bold));
     g.drawText ("MODE: " + juce::String (pageNames[static_cast<int> (currentLcdPage)]),
                 topBar, juce::Justification::centredLeft);
 
+    // Rechts in der LCD-Statuszeile: Flags oder aktueller Preset-Name
     juce::String flags;
     if (sceneSolo) flags += "[SOLO] ";
     if (sceneLink) flags += "[LINK]";
+
     if (flags.isNotEmpty())
     {
         g.setColour (juce::Colour::fromRGB (255, 210, 60));
         g.drawText (flags.trim(), topBar, juce::Justification::centredRight);
+    }
+    else
+    {
+        g.setColour (juce::Colour::fromRGB (0, 240, 255).withAlpha (0.85f));
+        g.drawText (audioProcessor.getCurrentPresetName().toUpperCase(),
+                    topBar.withTrimmedLeft (topBar.getWidth() * 0.44f),
+                    juce::Justification::centredRight, true);
     }
 
     g.setColour (sceneAccent.withAlpha (0.28f));
@@ -1644,8 +1841,8 @@ void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rec
         g.drawText (lcdNotifyTitle, titleArea, juce::Justification::centred);
 
         g.setColour (sceneAccent);
-        g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
-        g.drawText (lcdNotifyValue, screen, juce::Justification::centred);
+        g.setFont (juce::FontOptions (21.0f, juce::Font::bold));
+        g.drawText (lcdNotifyValue, screen, juce::Justification::centred, true);
         return;
     }
 
@@ -1742,7 +1939,8 @@ void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rec
 
             g.setColour (juce::Colour::fromRGB (0, 240, 255));
             g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-            g.drawText ("NEOMORPH X1 // DUAL-SCENE", screen.removeFromTop (21.0f), juce::Justification::centred);
+            g.drawText ("PRESET: " + audioProcessor.getCurrentPresetName(),
+                        screen.removeFromTop (21.0f), juce::Justification::centred, true);
 
             g.setColour (juce::Colour::fromRGB (170, 205, 230));
             g.setFont (juce::FontOptions (12.5f, juce::Font::plain));
@@ -2263,7 +2461,6 @@ void NeomorphX1AudioProcessorEditor::drawModMatrixPanels (juce::Graphics& g,
     const auto cyanAccent    = juce::Colour::fromRGB (0, 240, 255);
     const auto magentaAccent = juce::Colour::fromRGB (255, 60, 180);
 
-    // Linkes Panel: 4 Modulations-Slots
     g.setColour (juce::Colour::fromRGB (10, 15, 24).withAlpha (0.74f));
     g.fillRoundedRectangle (leftBounds, 6.0f);
     g.setColour (cyanAccent.withAlpha (0.38f));
@@ -2275,7 +2472,6 @@ void NeomorphX1AudioProcessorEditor::drawModMatrixPanels (juce::Graphics& g,
     g.drawText ("S" + juce::String (editingScene) + " // MOD MATRIX (SLOTS 1-4)",
                 leftHeader, juce::Justification::centredLeft);
 
-    // Rechtes Panel: LFO 1 + Live Monitor
     g.setColour (juce::Colour::fromRGB (10, 15, 24).withAlpha (0.74f));
     g.fillRoundedRectangle (rightBounds, 6.0f);
     g.setColour (magentaAccent.withAlpha (0.38f));
@@ -2309,7 +2505,6 @@ void NeomorphX1AudioProcessorEditor::drawModMatrixPanels (juce::Graphics& g,
     drawKnobLabel (modMatrixControls.lfoFadeKnob,  "FADE");
     drawKnobLabel (modMatrixControls.lfoDepthKnob, "DEPTH");
 
-    // Live-Pegelbalken für LFO 1 unten im rechten Panel
     auto meterBox = juce::Rectangle<float> (rightBounds.getX() + 10.0f,
                                             rightBounds.getBottom() - rightBounds.getHeight() * 0.16f,
                                             rightBounds.getWidth() - 20.0f,
@@ -2391,6 +2586,59 @@ void NeomorphX1AudioProcessorEditor::resized()
 {
     const float w = static_cast<float> (getWidth());
     const float h = static_cast<float> (getHeight());
+
+    // 0. Top-Bar Preset-Verwaltung
+    const float presetLeft   = 0.3821f * w;
+    const float presetTop    = 0.0190f * h;
+    const float presetRight  = 0.5768f * w;
+    const float presetBottom = 0.0540f * h;
+    presetBox.setBounds (
+        juce::roundToInt (presetLeft),
+        juce::roundToInt (presetTop),
+        juce::roundToInt (presetRight - presetLeft),
+        juce::roundToInt (presetBottom - presetTop)
+    );
+
+    const float topBtnW = 0.054f * w;
+    const float topBtnH = 0.032f * h;
+
+    savePresetButton.setBounds (
+        juce::roundToInt (0.1905f * w - topBtnW * 0.5f),
+        juce::roundToInt (0.0390f * h - topBtnH * 0.5f),
+        juce::roundToInt (topBtnW),
+        juce::roundToInt (topBtnH)
+    );
+
+    loadPresetButton.setBounds (
+        juce::roundToInt (0.2542f * w - topBtnW * 0.5f),
+        juce::roundToInt (0.0390f * h - topBtnH * 0.5f),
+        juce::roundToInt (topBtnW),
+        juce::roundToInt (topBtnH)
+    );
+
+    panicButton.setBounds (
+        juce::roundToInt (0.3190f * w - topBtnW * 0.5f),
+        juce::roundToInt (0.0390f * h - topBtnH * 0.5f),
+        juce::roundToInt (topBtnW),
+        juce::roundToInt (topBtnH)
+    );
+
+    const float navBtnW = 0.024f * w;
+    const float navBtnH = 0.034f * h;
+
+    prevPresetButton.setBounds (
+        juce::roundToInt (0.6173f * w - navBtnW * 0.5f),
+        juce::roundToInt (0.0307f * h - navBtnH * 0.5f),
+        juce::roundToInt (navBtnW),
+        juce::roundToInt (navBtnH)
+    );
+
+    nextPresetButton.setBounds (
+        juce::roundToInt (0.6464f * w - navBtnW * 0.5f),
+        juce::roundToInt (0.0307f * h - navBtnH * 0.5f),
+        juce::roundToInt (navBtnW),
+        juce::roundToInt (navBtnH)
+    );
 
     // 1. 6 Tab-Reiter
     const float tabStartX = 0.305f;
@@ -2623,8 +2871,8 @@ void NeomorphX1AudioProcessorEditor::resized()
     }
 
     // 10. Tab 3: Envelopes Layout
-    const float envKnobSize = 0.042f * w;
-    const float envKnobY    = panelY + 0.202f * h;
+    const float envKnobSize = 0.036f * w;
+    const float envKnobY    = panelY + 0.204f * h;
 
     for (size_t i = 0; i < envControls.size(); ++i)
     {
@@ -2655,37 +2903,34 @@ void NeomorphX1AudioProcessorEditor::resized()
 
         freeEgControls.canvas.setBounds (
             juce::roundToInt (leftPx + 10.0f),
-            juce::roundToInt (panelY + panelH * 0.16f),
+            juce::roundToInt (panelY + 0.044f * h),
             juce::roundToInt (panelW - 20.0f),
-            juce::roundToInt (panelH * 0.62f)
+            juce::roundToInt (0.168f * h)
         );
 
         freeEgControls.targetBox.setBounds (
-            juce::roundToInt (leftPx + 66.0f),
-            juce::roundToInt (panelY + panelH * 0.82f),
-            juce::roundToInt (panelW - 76.0f),
-            juce::roundToInt (panelH * 0.13f)
+            juce::roundToInt (leftPx + panelW * 0.34f),
+            juce::roundToInt (panelY + 0.222f * h),
+            juce::roundToInt (panelW * 0.66f - 10.0f),
+            juce::roundToInt (0.032f * h)
         );
 
-        const float dropW = (panelW - 28.0f) * 0.5f;
-        const float dropH = panelH * 0.13f;
-        const float dropY = panelY + panelH * 0.18f;
-
+        const float boxW = (panelW - 26.0f) * 0.5f;
         freeEgControls.modeBox.setBounds (
             juce::roundToInt (rightPx + 10.0f),
-            juce::roundToInt (dropY),
-            juce::roundToInt (dropW),
-            juce::roundToInt (dropH)
+            juce::roundToInt (panelY + 0.056f * h),
+            juce::roundToInt (boxW),
+            juce::roundToInt (0.034f * h)
         );
 
         freeEgControls.syncBox.setBounds (
-            juce::roundToInt (rightPx + 18.0f + dropW),
-            juce::roundToInt (dropY),
-            juce::roundToInt (dropW),
-            juce::roundToInt (dropH)
+            juce::roundToInt (rightPx + 16.0f + boxW),
+            juce::roundToInt (panelY + 0.056f * h),
+            juce::roundToInt (boxW),
+            juce::roundToInt (0.034f * h)
         );
 
-        const float fegKnobSize = 0.044f * w;
+        const float fegKnobSize = 0.040f * w;
         const float fegKnobY    = panelY + 0.186f * h;
 
         auto placeFegKnob = [rightPx, panelW, fegKnobSize, fegKnobY] (juce::Slider& k, int col)
@@ -2711,36 +2956,34 @@ void NeomorphX1AudioProcessorEditor::resized()
 
         stepSeqControls.canvas.setBounds (
             juce::roundToInt (leftPx + 10.0f),
-            juce::roundToInt (panelY + panelH * 0.16f),
+            juce::roundToInt (panelY + 0.044f * h),
             juce::roundToInt (panelW - 20.0f),
-            juce::roundToInt (panelH * 0.62f)
+            juce::roundToInt (0.168f * h)
         );
 
-        const float leftDropW = (panelW - 28.0f) * 0.5f;
-        const float dropH     = panelH * 0.13f;
-
+        const float boxW = (panelW - 26.0f) * 0.5f;
         stepSeqControls.modeBox.setBounds (
             juce::roundToInt (leftPx + 10.0f),
-            juce::roundToInt (panelY + panelH * 0.82f),
-            juce::roundToInt (leftDropW),
-            juce::roundToInt (dropH)
+            juce::roundToInt (panelY + 0.222f * h),
+            juce::roundToInt (boxW),
+            juce::roundToInt (0.032f * h)
         );
 
         stepSeqControls.lengthBox.setBounds (
-            juce::roundToInt (leftPx + 18.0f + leftDropW),
-            juce::roundToInt (panelY + panelH * 0.82f),
-            juce::roundToInt (leftDropW),
-            juce::roundToInt (dropH)
+            juce::roundToInt (leftPx + 16.0f + boxW),
+            juce::roundToInt (panelY + 0.222f * h),
+            juce::roundToInt (boxW),
+            juce::roundToInt (0.032f * h)
         );
 
         stepSeqControls.rateBox.setBounds (
-            juce::roundToInt (rightPx + 54.0f),
-            juce::roundToInt (panelY + panelH * 0.18f),
-            juce::roundToInt (panelW - 64.0f),
-            juce::roundToInt (dropH)
+            juce::roundToInt (rightPx + panelW * 0.30f),
+            juce::roundToInt (panelY + 0.056f * h),
+            juce::roundToInt (panelW * 0.70f - 10.0f),
+            juce::roundToInt (0.034f * h)
         );
 
-        const float seqKnobSize = 0.044f * w;
+        const float seqKnobSize = 0.040f * w;
         const float seqKnobY    = panelY + 0.186f * h;
 
         auto placeSeqKnob = [rightPx, panelW, seqKnobSize, seqKnobY] (juce::Slider& k, int col)
@@ -2764,49 +3007,50 @@ void NeomorphX1AudioProcessorEditor::resized()
         const float leftPx  = oscPanelX[0] * w;
         const float rightPx = oscPanelX[1] * w;
 
-        const float slotStartY = panelY + panelH * 0.16f;
-        const float slotStepY  = panelH * 0.205f;
-        const float slotH      = panelH * 0.155f;
-        const float amtSize    = slotH * 1.15f;
-        const float boxW       = (panelW - 34.0f - amtSize) * 0.5f;
+        const float rowStartY = panelY + 0.045f * h;
+        const float rowStepY  = 0.054f * h;
+        const float boxH      = 0.031f * h;
+        const float boxW      = (panelW - 20.0f - 0.032f * w) * 0.5f;
+        const float amtKnobSz = 0.025f * w;
 
         for (size_t m = 0; m < 4; ++m)
         {
             auto& slot = modMatrixControls.slots[m];
-            const float rowY = slotStartY + static_cast<float> (m) * slotStepY;
+            const float ry = rowStartY + static_cast<float> (m) * rowStepY;
 
             slot.srcBox.setBounds (
-                juce::roundToInt (leftPx + 10.0f),
-                juce::roundToInt (rowY),
+                juce::roundToInt (leftPx + 8.0f),
+                juce::roundToInt (ry),
                 juce::roundToInt (boxW),
-                juce::roundToInt (slotH)
+                juce::roundToInt (boxH)
             );
 
             slot.dstBox.setBounds (
-                juce::roundToInt (leftPx + 16.0f + boxW),
-                juce::roundToInt (rowY),
+                juce::roundToInt (leftPx + 12.0f + boxW),
+                juce::roundToInt (ry),
                 juce::roundToInt (boxW),
-                juce::roundToInt (slotH)
+                juce::roundToInt (boxH)
             );
 
+            const float knobCx = leftPx + panelW - 8.0f - amtKnobSz * 0.5f;
+            const float knobCy = ry + boxH * 0.5f;
             slot.amtKnob.setBounds (
-                juce::roundToInt (leftPx + panelW - 10.0f - amtSize),
-                juce::roundToInt (rowY + (slotH - amtSize) * 0.5f),
-                juce::roundToInt (amtSize),
-                juce::roundToInt (amtSize)
+                juce::roundToInt (knobCx - amtKnobSz * 0.5f),
+                juce::roundToInt (knobCy - amtKnobSz * 0.5f),
+                juce::roundToInt (amtKnobSz),
+                juce::roundToInt (amtKnobSz)
             );
         }
 
-        const float dropH = panelH * 0.13f;
         modMatrixControls.lfoSyncBox.setBounds (
-            juce::roundToInt (rightPx + 82.0f),
-            juce::roundToInt (panelY + panelH * 0.18f),
-            juce::roundToInt (panelW - 92.0f),
-            juce::roundToInt (dropH)
+            juce::roundToInt (rightPx + panelW * 0.36f),
+            juce::roundToInt (panelY + 0.050f * h),
+            juce::roundToInt (panelW * 0.64f - 10.0f),
+            juce::roundToInt (0.032f * h)
         );
 
-        const float lfoKnobSize = 0.041f * w;
-        const float lfoKnobY    = panelY + 0.158f * h;
+        const float lfoKnobSize = 0.036f * w;
+        const float lfoKnobY    = panelY + 0.156f * h;
 
         auto placeLfoKnob = [rightPx, panelW, lfoKnobSize, lfoKnobY] (juce::Slider& k, int col)
         {
@@ -2832,9 +3076,7 @@ void NeomorphX1AudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
         const float relX = static_cast<float> (event.x) / static_cast<float> (getWidth());
         const float relY = static_cast<float> (event.y) / static_cast<float> (getHeight());
 
-        const auto coordPair = juce::String::formatted ("{ %.4ff, %.4ff },", relX, relY);
-        juce::SystemClipboard::copyTextToClipboard (coordPair);
-
-        triggerLcdNotification ("COORDINATE COPIED", coordPair);
+        triggerLcdNotification ("RELATIVE COORDS",
+                                juce::String::formatted ("{ %.4ff, %.4ff }", relX, relY));
     }
 }

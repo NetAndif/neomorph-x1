@@ -277,6 +277,8 @@ namespace
             {
                 for (size_t s = 0; s < 2; ++s)
                 {
+                    sceneStates[s].svfStage1.reset();
+                    sceneStates[s].svfStage2.reset();
                     sceneStates[s].ampEnv.reset();
                     sceneStates[s].modEnv.reset();
                     sceneStates[s].freeEgReleased = true;
@@ -337,16 +339,15 @@ namespace
 
                 float morphModOffset = 0.0f;
 
-                // Vorab Mod-Matrix auf LFO-Rate prüfen
                 for (size_t s = 0; s < 2; ++s)
                 {
                     const auto& scP = cache.scenes[s];
                     for (size_t m = 0; m < 4; ++m)
                     {
-                        if (static_cast<int> (scP.modSlots[m].dst->load()) == 12) // LFO 1 Rate
+                        if (static_cast<int> (scP.modSlots[m].dst->load()) == 12)
                         {
                             const int srcIdx = static_cast<int> (scP.modSlots[m].src->load());
-                            if (srcIdx >= 11 && srcIdx <= 18) // Assign 1..8 (knobs 3..10)
+                            if (srcIdx >= 11 && srcIdx <= 18)
                             {
                                 const float knobV = cache.matrixKnobs[static_cast<size_t> (srcIdx - 9)]->load();
                                 lfoRateMod[s] += knobV * scP.modSlots[m].amount->load();
@@ -363,7 +364,6 @@ namespace
                     ampEnvArr[s] = state.ampEnv.getNextSample();
                     modEnvArr[s] = state.modEnv.getNextSample();
 
-                    // 1. Free EG
                     fegTarget[s] = static_cast<int> (scP.freeEg.target->load());
                     fegRawVal[s] = evaluateFreeEg (scP.freeEg,
                                                    state.freeEgPhase,
@@ -374,7 +374,6 @@ namespace
                     if (fegTarget[s] == 5)
                         morphModOffset += fegRawVal[s] * 0.5f;
 
-                    // 2. Step Sequencer
                     seqMode[s] = static_cast<int> (scP.stepSeq.mode->load());
                     if (seqMode[s] > 0)
                     {
@@ -435,7 +434,6 @@ namespace
                             morphModOffset += seqRawVal[s] * 0.5f;
                     }
 
-                    // 3. LFO 1
                     const int lfoSync  = static_cast<int> (scP.lfo1.sync->load());
                     const float fadeT  = scP.lfo1.fade->load();
                     const float depth  = scP.lfo1.depth->load();
@@ -467,7 +465,6 @@ namespace
                         cache.liveLfoOut[s].store (lfoSine[s]);
                 }
 
-                // Mod-Matrix für beide Scenes auswerten
                 struct SceneModAccum
                 {
                     float cutoffOct = 0.0f;
@@ -510,7 +507,7 @@ namespace
                             case 9:  srcVal = fegRawVal[s]; break;
                             case 10: srcVal = seqRawVal[s]; break;
                             default:
-                                if (srcIdx >= 11 && srcIdx <= 18) // Assign 1..8 = matrixKnobs[2..9]
+                                if (srcIdx >= 11 && srcIdx <= 18)
                                     srcVal = cache.matrixKnobs[static_cast<size_t> (srcIdx - 9)]->load();
                                 break;
                         }
@@ -520,18 +517,18 @@ namespace
 
                         switch (dstIdx)
                         {
-                            case 1:  acc.cutoffOct += modVal * 4.5f;  break; // Filter Cutoff
-                            case 2:  acc.resonance += modVal * 0.85f; break; // Filter Resonance
-                            case 3:  acc.osc1Semi  += modVal * 12.0f; break; // Osc 1 Pitch
-                            case 4:  acc.osc2Semi  += modVal * 12.0f; break; // Osc 2 Pitch
+                            case 1:  acc.cutoffOct += modVal * 4.5f;  break;
+                            case 2:  acc.resonance += modVal * 0.85f; break;
+                            case 3:  acc.osc1Semi  += modVal * 12.0f; break;
+                            case 4:  acc.osc2Semi  += modVal * 12.0f; break;
                             case 5:  acc.osc1Semi  += modVal * 12.0f;
-                                     acc.osc2Semi  += modVal * 12.0f; break; // Osc 1+2 Pitch
-                            case 6:  acc.osc1Pos   += modVal;         break; // Osc 1 Position
-                            case 7:  acc.osc2Pos   += modVal;         break; // Osc 2 Position
-                            case 8:  acc.oscMorph  += modVal;         break; // Osc 1+2 Morph
-                            case 9:  acc.osc1Lvl   += modVal;         break; // Osc 1 Level
-                            case 10: acc.osc2Lvl   += modVal;         break; // Osc 2 Level
-                            case 11: morphModOffset += modVal * 0.5f; break; // Scene Morph
+                                     acc.osc2Semi  += modVal * 12.0f; break;
+                            case 6:  acc.osc1Pos   += modVal;         break;
+                            case 7:  acc.osc2Pos   += modVal;         break;
+                            case 8:  acc.oscMorph  += modVal;         break;
+                            case 9:  acc.osc1Lvl   += modVal;         break;
+                            case 10: acc.osc2Lvl   += modVal;         break;
+                            case 11: morphModOffset += modVal * 0.5f; break;
                             default: break;
                         }
                     }
@@ -754,6 +751,8 @@ NeomorphX1AudioProcessor::NeomorphX1AudioProcessor()
     synth.addSound (new NeomorphSound());
     for (int i = 0; i < 16; ++i)
         synth.addVoice (new NeomorphVoice (paramCache));
+
+    ensureDefaultPresetExists();
 }
 
 NeomorphX1AudioProcessor::~NeomorphX1AudioProcessor()
@@ -859,7 +858,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    // 1. 10 rechte Drehregler: [0] = Master Volume (80%), [1] = Master Pan (50%), [2..9] = Assign 1..8
     const juce::StringArray knobNames = {
         "Master Volume", "Master Pan",
         "Assign 1", "Assign 2",
@@ -887,7 +885,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
         ));
     }
 
-    // 2. 3 Scene-Fader
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "scene_1", 1 }, "Scene 1",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.8f));
@@ -900,7 +897,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
         juce::ParameterID { "scene_2", 1 }, "Scene 2",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.8f));
 
-    // 3. Pitch- & Mod-Wheel
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { "pitch_wheel", 1 }, "Pitch Wheel",
         juce::NormalisableRange<float> (-1.0f, 1.0f, 0.001f), 0.0f));
@@ -909,7 +905,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
         juce::ParameterID { "mod_wheel", 1 }, "Mod Wheel",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f));
 
-    // 4. Dual-Scene Parameter (s1_ & s2_)
     const juce::StringArray waveforms = {
         "Basic Analog", "PWM / Pulse", "Formant", "Digital Fold", "SuperSaw", "Vocal Morph"
     };
@@ -919,7 +914,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
         const auto scenePrefix = "s" + juce::String (scene) + "_";
         const auto sceneLabel  = "S" + juce::String (scene) + " ";
 
-        // 4a. Oscillators Tab
         for (int osc = 1; osc <= 2; ++osc)
         {
             const auto prefix = scenePrefix + "osc" + juce::String (osc) + "_";
@@ -968,7 +962,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
                 osc == 1 ? 0.85f : 0.65f));
         }
 
-        // 4b. Envelopes Tab
         const char* envNames[2] = { "Amp Env ", "Filter Env " };
         for (int env = 1; env <= 2; ++env)
         {
@@ -999,7 +992,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
                 timeRange, defaultRelease));
         }
 
-        // 4c. Filter Tab
         const auto fltPrefix = scenePrefix + "flt_";
         const auto fltLabel  = sceneLabel + "Filter ";
 
@@ -1046,7 +1038,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
             juce::ParameterID { fltPrefix + "vel_sens", 1 }, fltLabel + "Velocity",
             juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.25f));
 
-        // 4d. Free EG Tab
         const auto fegPrefix = scenePrefix + "feg_";
         const auto fegLabel  = sceneLabel + "Free EG ";
 
@@ -1105,7 +1096,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
                 defLevels[static_cast<size_t> (pt)]));
         }
 
-        // 4e. Step Sequencer Tab
         const auto seqPrefix = scenePrefix + "seq_";
         const auto seqLabel  = sceneLabel + "Step Seq ";
 
@@ -1163,7 +1153,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
                 true));
         }
 
-        // 4f. Mod Matrix & LFO 1 Tab
         const auto lfoPrefix = scenePrefix + "lfo1_";
         const auto lfoLabel  = sceneLabel + "LFO 1 ";
 
@@ -1211,7 +1200,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
             const auto mp = scenePrefix + "mod" + juce::String (m + 1) + "_";
             const auto ml = sceneLabel + "Mod " + juce::String (m + 1) + " ";
 
-            // Slot 1 sinnvoll vorbelegen (Mod Wheel -> Osc 1+2 Pitch Vibrato bei S1, Assign 1 -> Filter Cutoff bei S2)
             const int defSrc = (m == 0) ? ((scene == 1) ? 4 : 11) : 0;
             const int defDst = (m == 0) ? ((scene == 1) ? 5 : 1)  : 0;
             const float defAmt = (m == 0 && scene == 2) ? 0.45f : 0.0f;
@@ -1231,6 +1219,153 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
     }
 
     return { params.begin(), params.end() };
+}
+
+// ==============================================================================
+// Preset-Verwaltung & Engine-Panic
+// ==============================================================================
+juce::File NeomorphX1AudioProcessor::getPresetDirectory() const
+{
+    auto baseDir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory);
+   #if JUCE_MAC
+    auto dir = baseDir.getChildFile ("Application Support").getChildFile ("NeomorphX1").getChildFile ("Presets");
+   #else
+    auto dir = baseDir.getChildFile ("NeomorphX1").getChildFile ("Presets");
+   #endif
+
+    if (! dir.exists())
+        dir.createDirectory();
+
+    return dir;
+}
+
+void NeomorphX1AudioProcessor::ensureDefaultPresetExists()
+{
+    const auto initFile = getPresetDirectory().getChildFile ("Init.xml");
+    if (! initFile.existsAsFile())
+    {
+        auto state = apvts.copyState();
+        std::unique_ptr<juce::XmlElement> xml (state.createXml());
+        if (xml != nullptr)
+        {
+            xml->setAttribute ("presetName", "Init");
+            xml->writeTo (initFile);
+        }
+    }
+}
+
+juce::StringArray NeomorphX1AudioProcessor::getAvailablePresets() const
+{
+    juce::StringArray names;
+    names.add ("Init");
+
+    const auto files = getPresetDirectory().findChildFiles (juce::File::findFiles, false, "*.xml");
+    juce::StringArray sorted;
+    for (const auto& f : files)
+    {
+        const auto name = f.getFileNameWithoutExtension();
+        if (! name.equalsIgnoreCase ("Init"))
+            sorted.add (name);
+    }
+
+    sorted.sort (true);
+    names.addArray (sorted);
+    return names;
+}
+
+bool NeomorphX1AudioProcessor::savePreset (const juce::String& presetName)
+{
+    const auto cleanName = juce::File::createLegalFileName (presetName.trim());
+    if (cleanName.isEmpty())
+        return false;
+
+    auto state = apvts.copyState();
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    if (xml == nullptr)
+        return false;
+
+    xml->setAttribute ("presetName", cleanName);
+
+    const auto targetFile = getPresetDirectory().getChildFile (cleanName + ".xml");
+    if (xml->writeTo (targetFile))
+    {
+        currentPresetName    = cleanName;
+        currentPresetIsSaved = ! cleanName.equalsIgnoreCase ("Init");
+        return true;
+    }
+
+    return false;
+}
+
+bool NeomorphX1AudioProcessor::loadPresetByName (const juce::String& presetName)
+{
+    if (presetName.equalsIgnoreCase ("Init"))
+    {
+        const auto initFile = getPresetDirectory().getChildFile ("Init.xml");
+        if (initFile.existsAsFile())
+        {
+            std::unique_ptr<juce::XmlElement> xml (juce::XmlDocument::parse (initFile));
+            if (xml != nullptr && xml->hasTagName (apvts.state.getType()))
+            {
+                apvts.replaceState (juce::ValueTree::fromXml (*xml));
+                currentPresetName    = "Init";
+                currentPresetIsSaved = false;
+                panicReset();
+                return true;
+            }
+        }
+
+        loadInitPatch();
+        return true;
+    }
+
+    const auto file = getPresetDirectory().getChildFile (presetName + ".xml");
+    return loadPresetFromFile (file, false);
+}
+
+bool NeomorphX1AudioProcessor::loadPresetFromFile (const juce::File& file, bool importToLibrary)
+{
+    if (! file.existsAsFile())
+        return false;
+
+    std::unique_ptr<juce::XmlElement> xml (juce::XmlDocument::parse (file));
+    if (xml == nullptr || ! xml->hasTagName (apvts.state.getType()))
+        return false;
+
+    const auto loadedName = xml->getStringAttribute ("presetName", file.getFileNameWithoutExtension());
+    apvts.replaceState (juce::ValueTree::fromXml (*xml));
+
+    currentPresetName    = loadedName;
+    currentPresetIsSaved = ! loadedName.equalsIgnoreCase ("Init");
+
+    if (importToLibrary && currentPresetIsSaved)
+    {
+        const auto destFile = getPresetDirectory().getChildFile (juce::File::createLegalFileName (loadedName) + ".xml");
+        xml->setAttribute ("presetName", loadedName);
+        xml->writeTo (destFile);
+    }
+
+    panicReset();
+    return true;
+}
+
+void NeomorphX1AudioProcessor::loadInitPatch()
+{
+    for (auto* param : getParameters())
+        param->setValueNotifyingHost (param->getDefaultValue());
+
+    currentPresetName    = "Init";
+    currentPresetIsSaved = false;
+    panicReset();
+}
+
+void NeomorphX1AudioProcessor::panicReset()
+{
+    panicRequested.store (true);
+    paramCache.activeSeqStep[0].store (-1);
+    paramCache.activeSeqStep[1].store (-1);
+    paramCache.liveLfoOut[0].store (0.0f);
+    paramCache.liveLfoOut[1].store (0.0f);
 }
 
 void NeomorphX1AudioProcessor::copySceneParameters (int sourceScene, int targetScene)
@@ -1325,68 +1460,16 @@ void NeomorphX1AudioProcessor::randomizeSceneParameters (int scene)
     }
 }
 
-const juce::String NeomorphX1AudioProcessor::getName() const
-{
-    return JucePlugin_Name;
-}
-
-bool NeomorphX1AudioProcessor::acceptsMidi() const
-{
-   #if JucePlugin_WantsMidiInput
-    return true;
-   #else
-    return false;
-   #endif
-}
-
-bool NeomorphX1AudioProcessor::producesMidi() const
-{
-   #if JucePlugin_ProducesMidiOutput
-    return true;
-   #else
-    return false;
-   #endif
-}
-
-bool NeomorphX1AudioProcessor::isMidiEffect() const
-{
-   #if JucePlugin_IsMidiEffect
-    return true;
-   #else
-    return false;
-   #endif
-}
-
-double NeomorphX1AudioProcessor::getTailLengthSeconds() const
-{
-    return 0.0;
-}
-
-int NeomorphX1AudioProcessor::getNumPrograms()
-{
-    return 1;
-}
-
-int NeomorphX1AudioProcessor::getCurrentProgram()
-{
-    return 0;
-}
-
-void NeomorphX1AudioProcessor::setCurrentProgram (int index)
-{
-    juce::ignoreUnused (index);
-}
-
-const juce::String NeomorphX1AudioProcessor::getProgramName (int index)
-{
-    juce::ignoreUnused (index);
-    return {};
-}
-
-void NeomorphX1AudioProcessor::changeProgramName (int index, const juce::String& newName)
-{
-    juce::ignoreUnused (index, newName);
-}
+const juce::String NeomorphX1AudioProcessor::getName() const { return JucePlugin_Name; }
+bool NeomorphX1AudioProcessor::acceptsMidi() const { return true; }
+bool NeomorphX1AudioProcessor::producesMidi() const { return false; }
+bool NeomorphX1AudioProcessor::isMidiEffect() const { return false; }
+double NeomorphX1AudioProcessor::getTailLengthSeconds() const { return 0.0; }
+int NeomorphX1AudioProcessor::getNumPrograms() { return 1; }
+int NeomorphX1AudioProcessor::getCurrentProgram() { return 0; }
+void NeomorphX1AudioProcessor::setCurrentProgram (int index) { juce::ignoreUnused (index); }
+const juce::String NeomorphX1AudioProcessor::getProgramName (int index) { juce::ignoreUnused (index); return {}; }
+void NeomorphX1AudioProcessor::changeProgramName (int index, const juce::String& newName) { juce::ignoreUnused (index, newName); }
 
 void NeomorphX1AudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
@@ -1394,28 +1477,16 @@ void NeomorphX1AudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
     synth.setCurrentPlaybackSampleRate (sampleRate);
 }
 
-void NeomorphX1AudioProcessor::releaseResources()
-{
-}
+void NeomorphX1AudioProcessor::releaseResources() {}
 
 #ifndef JucePlugin_PreferredChannelConfigurations
 bool NeomorphX1AudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-  #if JucePlugin_IsMidiEffect
-    juce::ignoreUnused (layouts);
-    return true;
-  #else
     if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
      && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
 
-   #if ! JucePlugin_IsSynth
-    if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
-        return false;
-   #endif
-
     return true;
-  #endif
 }
 #endif
 
@@ -1423,6 +1494,13 @@ void NeomorphX1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 {
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
+
+    if (panicRequested.exchange (false))
+    {
+        synth.allNotesOff (0, false);
+        midiMessages.clear();
+        return;
+    }
 
     if (auto* ph = getPlayHead())
     {
@@ -1454,9 +1532,8 @@ void NeomorphX1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     const int numSamples = buffer.getNumSamples();
     synth.renderNextBlock (buffer, midiMessages, 0, numSamples);
 
-    // Master Volume (knob_1, Default 80%) & Master Panorama (knob_2, Default 50% = Center)
     const float masterVol = paramCache.matrixKnobs[0]->load();
-    const float masterPan = paramCache.matrixKnobs[1]->load(); // 0.0 = L, 0.5 = Center, 1.0 = R
+    const float masterPan = paramCache.matrixKnobs[1]->load();
 
     const float panAngle = masterPan * juce::MathConstants<float>::halfPi;
     const float gainL    = masterVol * std::cos (panAngle) * 1.41421356f;
@@ -1473,10 +1550,7 @@ void NeomorphX1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     }
 }
 
-bool NeomorphX1AudioProcessor::hasEditor() const
-{
-    return true;
-}
+bool NeomorphX1AudioProcessor::hasEditor() const { return true; }
 
 juce::AudioProcessorEditor* NeomorphX1AudioProcessor::createEditor()
 {
@@ -1487,14 +1561,23 @@ void NeomorphX1AudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     std::unique_ptr<juce::XmlElement> xml (state.createXml());
-    copyXmlToBinary (*xml, destData);
+    if (xml != nullptr)
+    {
+        xml->setAttribute ("presetName", currentPresetName);
+        xml->setAttribute ("presetIsSaved", currentPresetIsSaved);
+        copyXmlToBinary (*xml, destData);
+    }
 }
 
 void NeomorphX1AudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
     if (xmlState != nullptr && xmlState->hasTagName (apvts.state.getType()))
+    {
+        currentPresetName    = xmlState->getStringAttribute ("presetName", "Init");
+        currentPresetIsSaved = xmlState->getBoolAttribute ("presetIsSaved", ! currentPresetName.equalsIgnoreCase ("Init"));
         apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
+    }
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

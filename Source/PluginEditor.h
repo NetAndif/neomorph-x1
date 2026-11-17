@@ -19,6 +19,22 @@ public:
     }
 };
 
+class TopBarPresetButton : public juce::TextButton
+{
+public:
+    std::function<void()> onRightClick;
+
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (e.mods.isRightButtonDown() && onRightClick != nullptr)
+        {
+            onRightClick();
+            return;
+        }
+        juce::TextButton::mouseUp (e);
+    }
+};
+
 class NeomorphX1AudioProcessorEditor : public juce::AudioProcessorEditor,
                                        private juce::Timer
 {
@@ -224,6 +240,12 @@ private:
     void timerCallback() override;
     void triggerLcdNotification (const juce::String& title, const juce::String& value);
 
+    void refreshPresetList();
+    void handleSavePresetClick (bool forceSaveAsDialog);
+    void handleLoadPresetClick();
+    void handlePanicClick();
+    void stepPreset (int delta);
+
     void setActiveTab (ActiveTab newTab);
     void setEditingScene (int newScene);
     void handleSceneButton (int buttonIndex);
@@ -258,6 +280,16 @@ private:
     std::array<juce::Image, static_cast<size_t> (ActiveTab::NumTabs)> tabImages;
     std::array<juce::TextButton, static_cast<size_t> (ActiveTab::NumTabs)> tabButtons;
     juce::TextButton settingsButton;
+
+    // Top-Bar Preset-Verwaltung
+    juce::ComboBox presetBox;
+    TopBarPresetButton savePresetButton;
+    TopBarPresetButton loadPresetButton;
+    TopBarPresetButton panicButton;
+    juce::TextButton prevPresetButton;
+    juce::TextButton nextPresetButton;
+    std::unique_ptr<juce::FileChooser> activeFileChooser;
+    bool suppressPresetBoxCallback = false;
 
     std::array<juce::TextButton, 8> sceneHardwareButtons;
     int editingScene  = 1;

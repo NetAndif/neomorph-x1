@@ -42,6 +42,19 @@ public:
     void resetSceneParameters (int scene);
     void randomizeSceneParameters (int scene);
 
+    // Preset-Verwaltung & Engine-Panic
+    juce::File getPresetDirectory() const;
+    void ensureDefaultPresetExists();
+    juce::StringArray getAvailablePresets() const;
+    bool savePreset (const juce::String& presetName);
+    bool loadPresetByName (const juce::String& presetName);
+    bool loadPresetFromFile (const juce::File& file, bool importToLibrary);
+    void loadInitPatch();
+    void panicReset();
+
+    juce::String getCurrentPresetName() const { return currentPresetName; }
+    bool isCurrentPresetSaved() const noexcept { return currentPresetIsSaved; }
+
     struct OscParamPointers
     {
         std::atomic<float>* wave     = nullptr;
@@ -118,7 +131,7 @@ public:
     {
         std::array<OscParamPointers, 2> oscs;
         FilterParamPointers filter;
-        std::array<EnvParamPointers, 2> envs; // 0 = Amp EG, 1 = Filter/Mod EG
+        std::array<EnvParamPointers, 2> envs;
         FreeEgParamPointers freeEg;
         StepSeqParamPointers stepSeq;
         LfoParamPointers lfo1;
@@ -133,7 +146,7 @@ public:
         std::atomic<float>* scene2Level = nullptr;
         std::atomic<float>* pitchWheel  = nullptr;
         std::atomic<float>* modWheel    = nullptr;
-        std::array<std::atomic<float>*, 10> matrixKnobs {}; // [0]=Master Vol, [1]=Master Pan, [2..9]=Assign 1..8
+        std::array<std::atomic<float>*, 10> matrixKnobs {};
         std::atomic<float> currentBpm { 120.0f };
         mutable std::array<std::atomic<int>, 2> activeSeqStep { -1, -1 };
         mutable std::array<std::atomic<float>, 2> liveLfoOut { 0.0f, 0.0f };
@@ -159,6 +172,10 @@ private:
 
     EngineParamCache paramCache;
     juce::Synthesiser synth;
+
+    juce::String currentPresetName { "Init" };
+    bool currentPresetIsSaved = false;
+    std::atomic<bool> panicRequested { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NeomorphX1AudioProcessor)
 };
