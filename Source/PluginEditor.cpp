@@ -2585,10 +2585,10 @@ void NeomorphX1AudioProcessorEditor::resized()
     const float h = static_cast<float> (getHeight());
 
     // 0. Top-Bar Preset-Verwaltung
-    const float presetLeft   = 0.3800f * w;
-    const float presetTop    = 0.0128f * h;
-    const float presetRight  = 0.6000f * w;
-    const float presetBottom = 0.0518f * h;
+    const float presetLeft   = 0.3820f * w;
+    const float presetTop    = 0.0108f * h;
+    const float presetRight  = 0.5980f * w;
+    const float presetBottom = 0.0500f * h;
     presetBox.setBounds (
         juce::roundToInt (presetLeft),
         juce::roundToInt (presetTop),
@@ -2601,21 +2601,21 @@ void NeomorphX1AudioProcessorEditor::resized()
 
     savePresetButton.setBounds (
         juce::roundToInt (0.1905f * w - topBtnW * 0.5f),
-        juce::roundToInt (0.0290f * h - topBtnH * 0.5f),
+        juce::roundToInt (0.0310f * h - topBtnH * 0.5f),
         juce::roundToInt (topBtnW),
         juce::roundToInt (topBtnH)
     );
 
     loadPresetButton.setBounds (
         juce::roundToInt (0.2542f * w - topBtnW * 0.5f),
-        juce::roundToInt (0.0290f * h - topBtnH * 0.5f),
+        juce::roundToInt (0.0310f * h - topBtnH * 0.5f),
         juce::roundToInt (topBtnW),
         juce::roundToInt (topBtnH)
     );
 
     panicButton.setBounds (
         juce::roundToInt (0.3190f * w - topBtnW * 0.5f),
-        juce::roundToInt (0.0290f * h - topBtnH * 0.5f),
+        juce::roundToInt (0.0310f * h - topBtnH * 0.5f),
         juce::roundToInt (topBtnW),
         juce::roundToInt (topBtnH)
     );
