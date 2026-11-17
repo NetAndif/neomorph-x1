@@ -58,6 +58,8 @@ juce_add_plugin(NeomorphX1
     FORMATS VST3 AU Standalone
     PRODUCT_NAME "NeomorphX1"
 	PLUGIN_NAME "Neomorph X1"
+	ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Assets/icon.png"
+	ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/Assets/icon.png"
 )
 
 # Generiert automatisch die benötigte JuceHeader.h für CMake Targets
