@@ -378,25 +378,22 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
     };
     addAndMakeVisible (presetBox);
 
-    savePresetButton.setButtonText ("SAVE");
+	savePresetButton.setAlpha (0.0f);
+    savePresetButton.setMouseCursor (juce::MouseCursor::PointingHandCursor);
     savePresetButton.setTooltip ("Save Preset (Right-Click: Save As...)");
-    savePresetButton.setColour (juce::TextButton::buttonColourId, juce::Colour::fromRGB (16, 24, 38).withAlpha (0.85f));
-    savePresetButton.setColour (juce::TextButton::textColourOffId, juce::Colour::fromRGB (0, 240, 255));
     savePresetButton.onClick = [this] { handleSavePresetClick (false); };
     savePresetButton.onRightClick = [this] { handleSavePresetClick (true); };
     addAndMakeVisible (savePresetButton);
 
-    loadPresetButton.setButtonText ("LOAD");
+	loadPresetButton.setAlpha (0.0f);
+    loadPresetButton.setMouseCursor (juce::MouseCursor::PointingHandCursor);
     loadPresetButton.setTooltip ("Load / Import External Preset (.xml)");
-    loadPresetButton.setColour (juce::TextButton::buttonColourId, juce::Colour::fromRGB (16, 24, 38).withAlpha (0.85f));
-    loadPresetButton.setColour (juce::TextButton::textColourOffId, juce::Colour::fromRGB (185, 220, 245));
     loadPresetButton.onClick = [this] { handleLoadPresetClick(); };
     addAndMakeVisible (loadPresetButton);
 
-    panicButton.setButtonText ("PANIC");
+	panicButton.setAlpha (0.0f);
+    panicButton.setMouseCursor (juce::MouseCursor::PointingHandCursor);
     panicButton.setTooltip ("All Notes Off & Reset Audio Engine");
-    panicButton.setColour (juce::TextButton::buttonColourId, juce::Colour::fromRGB (38, 14, 28).withAlpha (0.88f));
-    panicButton.setColour (juce::TextButton::textColourOffId, juce::Colour::fromRGB (255, 60, 180));
     panicButton.onClick = [this] { handlePanicClick(); };
     addAndMakeVisible (panicButton);
 
@@ -2588,10 +2585,10 @@ void NeomorphX1AudioProcessorEditor::resized()
     const float h = static_cast<float> (getHeight());
 
     // 0. Top-Bar Preset-Verwaltung
-    const float presetLeft   = 0.3821f * w;
-    const float presetTop    = 0.0190f * h;
-    const float presetRight  = 0.5768f * w;
-    const float presetBottom = 0.0540f * h;
+    const float presetLeft   = 0.3800f * w;
+    const float presetTop    = 0.0130f * h;
+    const float presetRight  = 0.6000f * w;
+    const float presetBottom = 0.0520f * h;
     presetBox.setBounds (
         juce::roundToInt (presetLeft),
         juce::roundToInt (presetTop),
@@ -2604,21 +2601,21 @@ void NeomorphX1AudioProcessorEditor::resized()
 
     savePresetButton.setBounds (
         juce::roundToInt (0.1905f * w - topBtnW * 0.5f),
-        juce::roundToInt (0.0390f * h - topBtnH * 0.5f),
+        juce::roundToInt (0.0280f * h - topBtnH * 0.5f),
         juce::roundToInt (topBtnW),
         juce::roundToInt (topBtnH)
     );
 
     loadPresetButton.setBounds (
         juce::roundToInt (0.2542f * w - topBtnW * 0.5f),
-        juce::roundToInt (0.0390f * h - topBtnH * 0.5f),
+        juce::roundToInt (0.0280f * h - topBtnH * 0.5f),
         juce::roundToInt (topBtnW),
         juce::roundToInt (topBtnH)
     );
 
     panicButton.setBounds (
         juce::roundToInt (0.3190f * w - topBtnW * 0.5f),
-        juce::roundToInt (0.0390f * h - topBtnH * 0.5f),
+        juce::roundToInt (0.0280f * h - topBtnH * 0.5f),
         juce::roundToInt (topBtnW),
         juce::roundToInt (topBtnH)
     );
