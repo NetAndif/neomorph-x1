@@ -292,7 +292,7 @@ private:
     CyberpunkLookAndFeel cyberpunkLookAndFeel;
 
     juce::Image backgroundImage;
-    std::array<juce::TextButton, static_cast<size_t> (ActiveTab::NumTabs)> tabButtons;
+	std::array<juce::Image, static_cast<size_t> (ActiveTab::NumTabs)> tabImages;
     juce::TextButton settingsButton;
 
     // Top-Bar Preset-Verwaltung

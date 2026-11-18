@@ -350,9 +350,13 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
 {
     setLookAndFeel (&cyberpunkLookAndFeel);
     setWantsKeyboardFocus (true);
-
-    backgroundImage = juce::ImageCache::getFromMemory (BinaryData::background_main_png,
-                                                       BinaryData::background_main_pngSize);
+    backgroundImage = juce::ImageCache::getFromMemory (BinaryData::background_main_png, BinaryData::background_main_pngSize);
+	tabImages[0] = juce::ImageCache::getFromMemory (BinaryData::tab_oscillators_png, BinaryData::tab_oscillators_pngSize);
+	tabImages[1] = juce::ImageCache::getFromMemory (BinaryData::tab_filter_png,      BinaryData::tab_filter_pngSize);
+	tabImages[2] = juce::ImageCache::getFromMemory (BinaryData::tab_envelopes_png,   BinaryData::tab_envelopes_pngSize);
+	tabImages[3] = juce::ImageCache::getFromMemory (BinaryData::tab_free_eg_png,     BinaryData::tab_free_eg_pngSize);
+	tabImages[4] = juce::ImageCache::getFromMemory (BinaryData::tab_step_seq_png,    BinaryData::tab_step_seq_pngSize);
+	tabImages[5] = juce::ImageCache::getFromMemory (BinaryData::tab_mod_matrix_png,  BinaryData::tab_mod_matrix_pngSize);
 
     // --- Top-Bar Preset-Verwaltung ---
     presetBox.setJustificationType (juce::Justification::centred);
@@ -2982,6 +2986,9 @@ void NeomorphX1AudioProcessorEditor::paint (juce::Graphics& g)
 
     if (backgroundImage.isValid())
         g.drawImage (backgroundImage, bounds, juce::RectanglePlacement::stretchToFit);
+		const auto& activeOverlay = tabImages[static_cast<size_t> (currentTab)];
+	if (activeOverlay.isValid())
+		g.drawImage (activeOverlay, bounds, juce::RectanglePlacement::stretchToFit);
 
     // Aktiven Tab in der Tab-Leiste dezent hervorheben
     const auto activeTabRect = tabButtons[static_cast<size_t> (currentTab)].getBounds().toFloat();
