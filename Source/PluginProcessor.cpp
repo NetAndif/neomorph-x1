@@ -1225,9 +1225,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
             const auto mp = scenePrefix + "mod" + juce::String (m + 1) + "_";
             const auto ml = sceneLabel + "Mod " + juce::String (m + 1) + " ";
 
-            const int defSrc = (m == 0) ? ((scene == 1) ? 4 : 11) : 0;
-            const int defDst = (m == 0) ? ((scene == 1) ? 5 : 1)  : 0;
-            const float defAmt = (m == 0 && scene == 2) ? 0.45f : 0.0f;
+			const int defSrc = 0;
+            const int defDst = 0;
+            const float defAmt = 0.0f;
 
             params.push_back (std::make_unique<juce::AudioParameterChoice> (
                 juce::ParameterID { mp + "src", 1 }, ml + "Source",
