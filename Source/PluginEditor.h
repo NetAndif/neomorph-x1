@@ -72,6 +72,7 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent& event) override;
+    bool keyPressed (const juce::KeyPress& key) override;
 
 private:
     class FreeEgCanvas : public juce::Component
@@ -247,6 +248,12 @@ private:
     void timerCallback() override;
     void triggerLcdNotification (const juce::String& title, const juce::String& value);
 
+    void setKeypadTarget (const juce::String& paramID, const juce::String& displayName);
+    void handleKeypadDigit (int digit);
+    void handleKeypadClear();
+    void handleKeypadEnter();
+    void handleKeypadToggleSign();
+
     void refreshPresetList();
     void handleSavePresetClick (bool forceSaveAsDialog);
     void handleLoadPresetClick();
@@ -285,7 +292,6 @@ private:
     CyberpunkLookAndFeel cyberpunkLookAndFeel;
 
     juce::Image backgroundImage;
-    std::array<juce::Image, static_cast<size_t> (ActiveTab::NumTabs)> tabImages;
     std::array<juce::TextButton, static_cast<size_t> (ActiveTab::NumTabs)> tabButtons;
     juce::TextButton settingsButton;
 
@@ -298,6 +304,14 @@ private:
     juce::TextButton nextPresetButton;
     std::unique_ptr<juce::FileChooser> activeFileChooser;
     bool suppressPresetBoxCallback = false;
+
+    // 10er-Nummernblock (1-9, CLR, 0, ENT)
+    std::array<juce::TextButton, 12> keypadButtons;
+    juce::String keypadTargetParamID { "knob_1" };
+    juce::String keypadTargetLabel   { "MASTER VOLUME" };
+    juce::String keypadBuffer;
+    bool keypadNegative = false;
+    bool keypadActive   = false;
 
     std::array<juce::TextButton, 8> sceneHardwareButtons;
     int editingScene  = 1;

@@ -349,16 +349,10 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
     setLookAndFeel (&cyberpunkLookAndFeel);
+    setWantsKeyboardFocus (true);
 
     backgroundImage = juce::ImageCache::getFromMemory (BinaryData::background_main_png,
                                                        BinaryData::background_main_pngSize);
-
-    tabImages[0] = juce::ImageCache::getFromMemory (BinaryData::tab_oscillators_png, BinaryData::tab_oscillators_pngSize);
-    tabImages[1] = juce::ImageCache::getFromMemory (BinaryData::tab_filter_png,      BinaryData::tab_filter_pngSize);
-    tabImages[2] = juce::ImageCache::getFromMemory (BinaryData::tab_envelopes_png,   BinaryData::tab_envelopes_pngSize);
-    tabImages[3] = juce::ImageCache::getFromMemory (BinaryData::tab_free_eg_png,     BinaryData::tab_free_eg_pngSize);
-    tabImages[4] = juce::ImageCache::getFromMemory (BinaryData::tab_step_seq_png,    BinaryData::tab_step_seq_pngSize);
-    tabImages[5] = juce::ImageCache::getFromMemory (BinaryData::tab_mod_matrix_png,  BinaryData::tab_mod_matrix_pngSize);
 
     // --- Top-Bar Preset-Verwaltung ---
     presetBox.setJustificationType (juce::Justification::centred);
@@ -411,6 +405,38 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
 
     refreshPresetList();
 
+    // --- 10er-Nummernblock (1..9, CLR, 0, ENT) ---
+    for (size_t i = 0; i < keypadButtons.size(); ++i)
+    {
+        auto& btn = keypadButtons[i];
+        btn.setAlpha (0.0f);
+        btn.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+
+        if (i < 9)
+        {
+            const int digit = static_cast<int> (i + 1);
+            btn.setTooltip ("Keypad " + juce::String (digit));
+            btn.onClick = [this, digit] { handleKeypadDigit (digit); };
+        }
+        else if (i == 9)
+        {
+            btn.setTooltip ("Clear Input (or Toggle +/- if Empty)");
+            btn.onClick = [this] { handleKeypadClear(); };
+        }
+        else if (i == 10)
+        {
+            btn.setTooltip ("Keypad 0");
+            btn.onClick = [this] { handleKeypadDigit (0); };
+        }
+        else
+        {
+            btn.setTooltip ("Apply Value (Enter)");
+            btn.onClick = [this] { handleKeypadEnter(); };
+        }
+
+        addAndMakeVisible (btn);
+    }
+
     for (size_t i = 0; i < tabButtons.size(); ++i)
     {
         auto& btn = tabButtons[i];
@@ -438,6 +464,7 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
         {
             currentLcdPage = static_cast<LcdPage> (i);
             showLcdNotify  = false;
+            keypadActive   = false;
             repaint();
         };
         addAndMakeVisible (btn);
@@ -465,16 +492,18 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
         if (auto* param = audioProcessor.apvts.getParameter (paramID))
             knob.setDoubleClickReturnValue (true, param->getDefaultValue());
 
-        knob.onValueChange = [this, i]
+        knob.onValueChange = [this, i, paramID]
         {
             const double val = matrixKnobs[i].getValue();
             if (i == 0)
             {
+                setKeypadTarget (paramID, "MASTER VOLUME");
                 const int pct = juce::roundToInt (val * 100.0);
                 triggerLcdNotification ("MASTER VOLUME", juce::String (pct) + "%");
             }
             else if (i == 1)
             {
+                setKeypadTarget (paramID, "MASTER PAN");
                 const int panOffset = juce::roundToInt ((val - 0.5) * 200.0);
                 if (std::abs (panOffset) <= 1)
                     triggerLcdNotification ("MASTER PAN", "CENTER (50%)");
@@ -484,9 +513,10 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
             }
             else
             {
+                const auto lbl = "MATRIX ASSIGN " + juce::String (static_cast<int> (i - 1));
+                setKeypadTarget (paramID, lbl);
                 const int pct = juce::roundToInt (val * 100.0);
-                triggerLcdNotification ("MATRIX ASSIGN " + juce::String (static_cast<int> (i - 1)),
-                                        juce::String (pct) + "%");
+                triggerLcdNotification (lbl, juce::String (pct) + "%");
             }
         };
 
@@ -511,12 +541,14 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
         fader.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         fader.setColour (juce::Slider::thumbColourId, faderColours[i]);
 
-        if (auto* param = audioProcessor.apvts.getParameter (faderParamIDs[i]))
+        const juce::String pID (faderParamIDs[i]);
+        if (auto* param = audioProcessor.apvts.getParameter (pID))
             fader.setDoubleClickReturnValue (true, param->getDefaultValue());
 
         const juce::String label (faderLabels[i]);
-        fader.onValueChange = [this, i, label]
+        fader.onValueChange = [this, i, pID, label]
         {
+            setKeypadTarget (pID, label);
             const int pct = juce::roundToInt (sceneFaders[i].getValue() * 100.0);
             triggerLcdNotification (label, juce::String (pct) + "%");
         };
@@ -524,7 +556,7 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
         addAndMakeVisible (fader);
 
         faderAttachments[i] = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-            audioProcessor.apvts, faderParamIDs[i], fader);
+            audioProcessor.apvts, pID, fader);
     }
 
     pitchWheel.setSliderStyle (juce::Slider::LinearVertical);
@@ -549,6 +581,7 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
     modWheel.setDoubleClickReturnValue (true, 0.0);
     modWheel.onValueChange = [this]
     {
+        setKeypadTarget ("mod_wheel", "MODULATION WHEEL");
         const int pct = juce::roundToInt (modWheel.getValue() * 100.0);
         triggerLcdNotification ("MODULATION WHEEL", juce::String (pct) + "%");
     };
@@ -602,18 +635,20 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
 
             slider.onValueChange = [this, &slider, oscNum, paramSuffix, formatTitle, formatVal]
             {
+                const auto srcID = "s" + juce::String (editingScene) + "_osc" + juce::String (oscNum) + "_" + paramSuffix;
                 if (sceneLink)
                 {
                     const int otherScene = (editingScene == 1) ? 2 : 1;
-                    const auto srcID = "s" + juce::String (editingScene) + "_osc" + juce::String (oscNum) + "_" + paramSuffix;
-                    const auto dstID = "s" + juce::String (otherScene)   + "_osc" + juce::String (oscNum) + "_" + paramSuffix;
+                    const auto dstID = "s" + juce::String (otherScene) + "_osc" + juce::String (oscNum) + "_" + paramSuffix;
                     if (auto* srcP = audioProcessor.apvts.getParameter (srcID))
                         if (auto* dstP = audioProcessor.apvts.getParameter (dstID))
                             dstP->setValueNotifyingHost (srcP->getValue());
                 }
 
                 const double v = slider.getValue();
-                triggerLcdNotification (formatTitle (v), formatVal (v));
+                const auto title = formatTitle (v);
+                setKeypadTarget (srcID, title);
+                triggerLcdNotification (title, formatVal (v));
             };
 
             addChildComponent (slider);
@@ -712,8 +747,10 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
         slider.onValueChange = [this, &slider, mirrorFilterParam, paramSuffix, paramName, formatVal]
         {
             mirrorFilterParam (paramSuffix);
-            triggerLcdNotification ("S" + juce::String (editingScene) + " // FLT " + paramName,
-                                    formatVal (slider.getValue()));
+            const auto srcID = "s" + juce::String (editingScene) + "_flt_" + paramSuffix;
+            const auto title = "S" + juce::String (editingScene) + " // FLT " + paramName;
+            setKeypadTarget (srcID, title);
+            triggerLcdNotification (title, formatVal (slider.getValue()));
         };
 
         addChildComponent (slider);
@@ -768,18 +805,19 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
 
             slider.onValueChange = [this, &slider, envNum, envTitle, paramSuffix, paramName, formatVal]
             {
+                const auto srcID = "s" + juce::String (editingScene) + "_env" + juce::String (envNum) + "_" + paramSuffix;
                 if (sceneLink)
                 {
                     const int otherScene = (editingScene == 1) ? 2 : 1;
-                    const auto srcID = "s" + juce::String (editingScene) + "_env" + juce::String (envNum) + "_" + paramSuffix;
-                    const auto dstID = "s" + juce::String (otherScene)   + "_env" + juce::String (envNum) + "_" + paramSuffix;
+                    const auto dstID = "s" + juce::String (otherScene) + "_env" + juce::String (envNum) + "_" + paramSuffix;
                     if (auto* srcP = audioProcessor.apvts.getParameter (srcID))
                         if (auto* dstP = audioProcessor.apvts.getParameter (dstID))
                             dstP->setValueNotifyingHost (srcP->getValue());
                 }
 
-                triggerLcdNotification (juce::String::formatted ("S%d // %s %s", editingScene, envTitle, paramName.toRawUTF8()),
-                                        formatVal (slider.getValue()));
+                const auto title = juce::String::formatted ("S%d // %s %s", editingScene, envTitle, paramName.toRawUTF8());
+                setKeypadTarget (srcID, title);
+                triggerLcdNotification (title, formatVal (slider.getValue()));
             };
 
             addChildComponent (slider);
@@ -863,8 +901,10 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
         slider.onValueChange = [this, &slider, mirrorFegParam, paramSuffix, paramName, formatVal]
         {
             mirrorFegParam (paramSuffix);
-            triggerLcdNotification ("S" + juce::String (editingScene) + " // FEG " + paramName,
-                                    formatVal (slider.getValue()));
+            const auto srcID = "s" + juce::String (editingScene) + "_feg_" + paramSuffix;
+            const auto title = "S" + juce::String (editingScene) + " // FEG " + paramName;
+            setKeypadTarget (srcID, title);
+            triggerLcdNotification (title, formatVal (slider.getValue()));
         };
 
         addChildComponent (slider);
@@ -954,8 +994,10 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
         slider.onValueChange = [this, &slider, mirrorSeqParam, paramSuffix, paramName, formatVal]
         {
             mirrorSeqParam (paramSuffix);
-            triggerLcdNotification ("S" + juce::String (editingScene) + " // SEQ " + paramName,
-                                    formatVal (slider.getValue()));
+            const auto srcID = "s" + juce::String (editingScene) + "_seq_" + paramSuffix;
+            const auto title = "S" + juce::String (editingScene) + " // SEQ " + paramName;
+            setKeypadTarget (srcID, title);
+            triggerLcdNotification (title, formatVal (slider.getValue()));
         };
 
         addChildComponent (slider);
@@ -1034,9 +1076,11 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
         slot.amtKnob.onValueChange = [this, &slot, slotNum, mirrorModSlot]
         {
             mirrorModSlot ("amt");
+            const auto srcID = "s" + juce::String (editingScene) + "_mod" + juce::String (slotNum) + "_amt";
+            const auto title = juce::String::formatted ("S%d // MOD %d AMT", editingScene, slotNum);
+            setKeypadTarget (srcID, title);
             const int pct = juce::roundToInt (slot.amtKnob.getValue() * 100.0);
-            triggerLcdNotification (juce::String::formatted ("S%d // MOD %d AMT", editingScene, slotNum),
-                                    juce::String::formatted ("%+d%%", pct));
+            triggerLcdNotification (title, juce::String::formatted ("%+d%%", pct));
         };
         addChildComponent (slot.amtKnob);
     }
@@ -1081,8 +1125,10 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
         slider.onValueChange = [this, &slider, mirrorLfoParam, paramSuffix, paramName, formatVal]
         {
             mirrorLfoParam (paramSuffix);
-            triggerLcdNotification ("S" + juce::String (editingScene) + " // LFO " + paramName,
-                                    formatVal (slider.getValue()));
+            const auto srcID = "s" + juce::String (editingScene) + "_lfo1_" + paramSuffix;
+            const auto title = "S" + juce::String (editingScene) + " // LFO " + paramName;
+            setKeypadTarget (srcID, title);
+            triggerLcdNotification (title, formatVal (slider.getValue()));
         };
 
         addChildComponent (slider);
@@ -1126,6 +1172,165 @@ NeomorphX1AudioProcessorEditor::~NeomorphX1AudioProcessorEditor()
 {
     stopTimer();
     setLookAndFeel (nullptr);
+}
+
+// ==============================================================================
+// 10er-Nummernblock Logik (Direkte Parameter-Eingabe)
+// ==============================================================================
+void NeomorphX1AudioProcessorEditor::setKeypadTarget (const juce::String& paramID, const juce::String& displayName)
+{
+    if (keypadTargetParamID != paramID)
+    {
+        keypadBuffer.clear();
+        keypadNegative = false;
+        keypadActive   = false;
+    }
+    keypadTargetParamID = paramID;
+    keypadTargetLabel   = displayName;
+}
+
+void NeomorphX1AudioProcessorEditor::handleKeypadDigit (int digit)
+{
+    if (keypadBuffer.length() >= 6)
+        return;
+
+    if (keypadBuffer == "0")
+        keypadBuffer = juce::String (digit);
+    else
+        keypadBuffer += juce::String (digit);
+
+    keypadActive = true;
+    const auto signStr = keypadNegative ? "-" : "";
+    triggerLcdNotification ("KEYPAD // " + keypadTargetLabel, signStr + keypadBuffer + "_");
+}
+
+void NeomorphX1AudioProcessorEditor::handleKeypadClear()
+{
+    // Wenn Puffer leer ist, schaltet CLR das Vorzeichen (+/-) um – praktisch für bipolare Parameter
+    if (keypadBuffer.isEmpty())
+    {
+        handleKeypadToggleSign();
+        return;
+    }
+
+    keypadBuffer.clear();
+    keypadNegative = false;
+    keypadActive   = false;
+    triggerLcdNotification ("KEYPAD // " + keypadTargetLabel, "CLEARED");
+}
+
+void NeomorphX1AudioProcessorEditor::handleKeypadToggleSign()
+{
+    keypadNegative = ! keypadNegative;
+    keypadActive   = true;
+    const auto signStr = keypadNegative ? "-" : "+";
+    triggerLcdNotification ("KEYPAD // " + keypadTargetLabel, signStr + keypadBuffer + "_");
+}
+
+void NeomorphX1AudioProcessorEditor::handleKeypadEnter()
+{
+    if (keypadBuffer.isEmpty())
+        return;
+
+    auto* param = audioProcessor.apvts.getParameter (keypadTargetParamID);
+    if (param == nullptr)
+    {
+        keypadBuffer.clear();
+        keypadActive = false;
+        return;
+    }
+
+    const double rawVal = keypadBuffer.getDoubleValue() * (keypadNegative ? -1.0 : 1.0);
+    float realValue = 0.0f;
+
+    if (keypadTargetParamID.endsWith ("_cutoff"))
+    {
+        // > 20 direkt als Hz (z.B. 1200 -> 1200 Hz), <= 20 als kHz (z.B. 4 -> 4000 Hz)
+        const double hz = (std::abs (rawVal) <= 20.0) ? (std::abs (rawVal) * 1000.0) : std::abs (rawVal);
+        realValue = juce::jlimit (20.0f, 20000.0f, static_cast<float> (hz));
+    }
+    else if (keypadTargetParamID.endsWith ("_attack")
+          || keypadTargetParamID.endsWith ("_decay")
+          || keypadTargetParamID.endsWith ("_release")
+          || keypadTargetParamID.endsWith ("_time")
+          || keypadTargetParamID.endsWith ("_fade"))
+    {
+        // <= 16 als Sekunden, > 16 als Millisekunden (z.B. 250 -> 0.250 s)
+        const double sec = (std::abs (rawVal) > 16.0) ? (std::abs (rawVal) / 1000.0) : std::abs (rawVal);
+        realValue = static_cast<float> (sec);
+    }
+    else if (keypadTargetParamID.endsWith ("_octave"))
+    {
+        realValue = juce::jlimit (-2.0f, 2.0f, static_cast<float> (rawVal));
+    }
+    else if (keypadTargetParamID.endsWith ("_semi"))
+    {
+        realValue = juce::jlimit (-12.0f, 12.0f, static_cast<float> (rawVal));
+    }
+    else if (keypadTargetParamID.endsWith ("_detune"))
+    {
+        realValue = juce::jlimit (-50.0f, 50.0f, static_cast<float> (rawVal));
+    }
+    else if (keypadTargetParamID.endsWith ("_phase"))
+    {
+        realValue = juce::jlimit (0.0f, 360.0f, static_cast<float> (std::abs (rawVal)));
+    }
+    else if (keypadTargetParamID.endsWith ("_rate"))
+    {
+        realValue = juce::jlimit (0.05f, 20.0f, static_cast<float> (std::abs (rawVal)));
+    }
+    else if (keypadTargetParamID == "knob_2")
+    {
+        // Master Pan: -100..+100 -> 0.0..1.0
+        const float panNorm = juce::jlimit (-100.0f, 100.0f, static_cast<float> (rawVal)) / 200.0f + 0.5f;
+        realValue = panNorm;
+    }
+    else if (keypadTargetParamID.endsWith ("_pan")
+          || keypadTargetParamID.endsWith ("_env_amt")
+          || keypadTargetParamID.endsWith ("_amt")
+          || keypadTargetParamID.endsWith ("_amount"))
+    {
+        // Bipolare Prozentwerte (-100..+100 -> -1.0..+1.0)
+        realValue = juce::jlimit (-100.0f, 100.0f, static_cast<float> (rawVal)) / 100.0f;
+    }
+    else
+    {
+        // Standard Unipolar Prozent (0..100 -> 0.0..1.0)
+        realValue = juce::jlimit (0.0f, 100.0f, static_cast<float> (std::abs (rawVal))) / 100.0f;
+    }
+
+    const float norm = juce::jlimit (0.0f, 1.0f, param->convertTo0to1 (realValue));
+    param->setValueNotifyingHost (norm);
+
+    keypadBuffer.clear();
+    keypadNegative = false;
+    keypadActive   = false;
+}
+
+bool NeomorphX1AudioProcessorEditor::keyPressed (const juce::KeyPress& key)
+{
+    const auto ch = key.getTextCharacter();
+    if (ch >= '0' && ch <= '9')
+    {
+        handleKeypadDigit (ch - '0');
+        return true;
+    }
+    if (ch == '-')
+    {
+        handleKeypadToggleSign();
+        return true;
+    }
+    if (key == juce::KeyPress::returnKey)
+    {
+        handleKeypadEnter();
+        return true;
+    }
+    if (key == juce::KeyPress::backspaceKey || key == juce::KeyPress::escapeKey)
+    {
+        handleKeypadClear();
+        return true;
+    }
+    return false;
 }
 
 // ==============================================================================
@@ -1259,7 +1464,7 @@ void NeomorphX1AudioProcessorEditor::timerCallback()
     if (presetBox.getText() != audioProcessor.getCurrentPresetName())
         refreshPresetList();
 
-    if (showLcdNotify && lcdNotifyTicks > 0)
+    if (showLcdNotify && lcdNotifyTicks > 0 && ! keypadActive)
     {
         if (--lcdNotifyTicks == 0)
             showLcdNotify = false;
@@ -1321,11 +1526,8 @@ void NeomorphX1AudioProcessorEditor::timerCallback()
 
     audioProcessor.copyScopeSamples (scopeCache);
 
-    // Unteres Status-Panel (und ggf. LCD/LFO) kontinuierlich mit 30 Hz neu zeichnen
     if (! bottomStripBounds.isEmpty())
         repaint (bottomStripBounds.toNearestInt().expanded (2));
-    else
-        repaint();
 }
 
 void NeomorphX1AudioProcessorEditor::triggerLcdNotification (const juce::String& title, const juce::String& value)
@@ -1823,7 +2025,7 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
 
 void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rectangle<float> lcdBounds)
 {
-    auto screen = lcdBounds.reduced (6.0f, 5.0f);
+    auto screen = lcdBounds.reduced (7.0f, 6.0f);
     const auto sceneAccent = (editingScene == 1)
                                  ? juce::Colour::fromRGB (0, 240, 255)
                                  : juce::Colour::fromRGB (255, 60, 180);
@@ -1833,7 +2035,7 @@ void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rec
         g.drawHorizontalLine (juce::roundToInt (y), screen.getX(), screen.getRight());
 
     const char* pageNames[4] = { "PATCH", "MORPH", "ASSIGN", "SYSTEM" };
-    auto topBar = screen.removeFromTop (17.0f);
+    auto topBar = screen.removeFromTop (18.0f);
 
     g.setColour (juce::Colour::fromRGB (130, 175, 205));
     g.setFont (juce::FontOptions (11.5f, juce::Font::bold));
@@ -1853,7 +2055,7 @@ void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rec
     {
         g.setColour (juce::Colour::fromRGB (0, 240, 255).withAlpha (0.85f));
         g.drawText (audioProcessor.getCurrentPresetName().toUpperCase(),
-                    topBar.withTrimmedLeft (topBar.getWidth() * 0.44f),
+                    topBar.withTrimmedLeft (topBar.getWidth() * 0.42f),
                     juce::Justification::centredRight, true);
     }
 
@@ -1863,12 +2065,12 @@ void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rec
 
     if (showLcdNotify)
     {
-        auto titleArea = screen.removeFromTop (screen.getHeight() * 0.38f);
+        auto titleArea = screen.removeFromTop (screen.getHeight() * 0.36f);
         g.setColour (juce::Colour::fromRGB (170, 215, 240));
-        g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-        g.drawText (lcdNotifyTitle, titleArea, juce::Justification::centred);
+        g.setFont (juce::FontOptions (12.5f, juce::Font::bold));
+        g.drawText (lcdNotifyTitle, titleArea, juce::Justification::centred, true);
 
-        g.setColour (sceneAccent);
+        g.setColour (keypadActive ? juce::Colour::fromRGB (255, 210, 60) : sceneAccent);
         g.setFont (juce::FontOptions (21.0f, juce::Font::bold));
         g.drawText (lcdNotifyValue, screen, juce::Justification::centred, true);
         return;
@@ -1878,7 +2080,7 @@ void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rec
     {
         case LcdPage::Patch:
         {
-            auto mainSceneRect = screen.removeFromTop (screen.getHeight() * 0.60f);
+            auto mainSceneRect = screen.removeFromTop (screen.getHeight() * 0.62f);
 
             g.setColour (sceneAccent.withAlpha (0.22f));
             g.setFont (juce::FontOptions (28.0f, juce::Font::bold));
@@ -1967,7 +2169,7 @@ void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rec
 
             g.setColour (juce::Colour::fromRGB (0, 240, 255));
             g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-            g.drawText ("PRESET: " + audioProcessor.getCurrentPresetName(),
+            g.drawText ("KEYPAD TARGET: " + keypadTargetLabel,
                         screen.removeFromTop (21.0f), juce::Justification::centred, true);
 
             g.setColour (juce::Colour::fromRGB (170, 205, 230));
@@ -1992,7 +2194,6 @@ void NeomorphX1AudioProcessorEditor::drawBottomStatusStrip (juce::Graphics& g, j
     const auto magenta = juce::Colour::fromRGB (255, 60, 180);
     const auto amber   = juce::Colour::fromRGB (255, 205, 50);
 
-    // Dezente Scanlines über die gesamte Breite
     g.setColour (cyan.withAlpha (0.035f));
     for (float y = stripBounds.getY() + 1.0f; y < stripBounds.getBottom(); y += 3.0f)
         g.drawHorizontalLine (juce::roundToInt (y), stripBounds.getX() + 2.0f, stripBounds.getRight() - 2.0f);
@@ -2006,9 +2207,7 @@ void NeomorphX1AudioProcessorEditor::drawBottomStatusStrip (juce::Graphics& g, j
         g.drawVerticalLine (juce::roundToInt (x), top + 2.0f, bottom - 2.0f);
     };
 
-    // --------------------------------------------------------------------------
     // Sektion 1 (24%): MIDI Activity, Note/Velocity & 16-Voice-Monitor
-    // --------------------------------------------------------------------------
     auto sec1 = area.removeFromLeft (totalW * 0.24f);
     drawDivider (sec1.getRight(), area.getY(), area.getBottom());
     sec1.removeFromRight (6.0f);
@@ -2042,7 +2241,6 @@ void NeomorphX1AudioProcessorEditor::drawBottomStatusStrip (juce::Graphics& g, j
     g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
     g.drawText (midiText, sec1Top.withTrimmedLeft (10.0f), juce::Justification::centredLeft, true);
 
-    // Untere Zeile: 16 Voice-Segmente + Zähler
     const int voices = juce::jlimit (0, 16, audioProcessor.getActiveVoiceCount());
     auto voiceLabelRect = sec1.removeFromRight (52.0f);
     g.setColour (voices > 0 ? magenta : juce::Colour::fromRGB (115, 145, 170));
@@ -2062,9 +2260,7 @@ void NeomorphX1AudioProcessorEditor::drawBottomStatusStrip (juce::Graphics& g, j
         g.fillRoundedRectangle (seg, 1.0f);
     }
 
-    // --------------------------------------------------------------------------
     // Sektion 2 (32%): Echtzeit-Oszilloskop / Morph-Vektor (Klick schaltet um)
-    // --------------------------------------------------------------------------
     auto sec2 = area.removeFromLeft (totalW * 0.32f);
     drawDivider (sec2.getRight(), area.getY(), area.getBottom());
     sec2 = sec2.reduced (6.0f, 0.0f);
@@ -2140,9 +2336,7 @@ void NeomorphX1AudioProcessorEditor::drawBottomStatusStrip (juce::Graphics& g, j
         g.fillRect (splitX - 1.0f, bar.getY(), 2.0f, bar.getHeight());
     }
 
-    // --------------------------------------------------------------------------
     // Sektion 3 (26%): Stereo Output Peak Meter L / R
-    // --------------------------------------------------------------------------
     auto sec3 = area.removeFromLeft (totalW * 0.26f);
     drawDivider (sec3.getRight(), area.getY(), area.getBottom());
     sec3 = sec3.reduced (6.0f, 1.0f);
@@ -2187,9 +2381,7 @@ void NeomorphX1AudioProcessorEditor::drawBottomStatusStrip (juce::Graphics& g, j
     drawChannelMeter (meterTop, "L", smoothedLevelL, peakHoldL);
     drawChannelMeter (sec3,     "R", smoothedLevelR, peakHoldR);
 
-    // --------------------------------------------------------------------------
     // Sektion 4 (Rest ~18%): Host BPM, Sample-Rate & DSP Status
-    // --------------------------------------------------------------------------
     auto sec4 = area.withTrimmedLeft (6.0f);
     const float bpm   = audioProcessor.getHostBpm();
     const double srKhz = audioProcessor.getCurrentSampleRateHz() / 1000.0;
@@ -2207,7 +2399,7 @@ void NeomorphX1AudioProcessorEditor::drawBottomStatusStrip (juce::Graphics& g, j
 
 void NeomorphX1AudioProcessorEditor::drawSceneLeds (juce::Graphics& g, float w, float h)
 {
-    constexpr float ledX[4] = { 0.4976f, 0.5369f, 0.5762f, 0.6173f };
+    constexpr float ledX[4] = { 0.4985f, 0.5380f, 0.5775f, 0.6185f };
     const float ledY        = 0.6135f * h;
     const float ledRadius   = 0.0042f * w;
 
@@ -2790,21 +2982,28 @@ void NeomorphX1AudioProcessorEditor::paint (juce::Graphics& g)
     if (backgroundImage.isValid())
         g.drawImage (backgroundImage, getLocalBounds().toFloat(), juce::RectanglePlacement::stretchToFit);
 
-    const auto& activeImg = tabImages[static_cast<size_t> (currentTab)];
-    if (activeImg.isValid())
+    // Aktiven Tab in der Tab-Leiste (0.305f .. 0.822f, y = 0.193f .. 0.236f) dezent hervorheben
+    const auto activeTabRect = tabButtons[static_cast<size_t> (currentTab)].getBounds().toFloat();
+    if (! activeTabRect.isEmpty())
     {
-        juce::Rectangle<float> tabDest (0.2893f * w, 0.0889f * h, 0.4152f * w, 0.0556f * h);
-        g.drawImage (activeImg, tabDest, juce::RectanglePlacement::stretchToFit);
+        const auto cyan = juce::Colour::fromRGB (0, 240, 255);
+        g.setColour (cyan.withAlpha (0.14f));
+        g.fillRoundedRectangle (activeTabRect.reduced (2.0f, 2.0f), 3.0f);
+        g.setColour (cyan);
+        g.fillRect (activeTabRect.getX() + 4.0f, activeTabRect.getBottom() - 2.5f,
+                    activeTabRect.getWidth() - 8.0f, 2.5f);
     }
 
-    drawLcdScreen (g, juce::Rectangle<float> (0.4535f * w, 0.6400f * h, 0.1755f * w, 0.1790f * h));
+    // LCD-Display links unter dem Logo (0.068f, 0.240f bis 0.285f, 0.388f)
+    drawLcdScreen (g, juce::Rectangle<float> (0.0680f * w, 0.2400f * h, 0.2170f * w, 0.1480f * h));
     drawSceneLeds (g, w, h);
 
     if (! bottomStripBounds.isEmpty())
         drawBottomStatusStrip (g, bottomStripBounds);
 
-    const auto leftPanel  = juce::Rectangle<float> (0.273f * w, 0.158f * h, 0.218f * w, 0.422f * h);
-    const auto rightPanel = juce::Rectangle<float> (0.503f * w, 0.158f * h, 0.218f * w, 0.422f * h);
+    // Haupt-Workspace (großer Cyan-Rahmen: x = 0.305f .. 0.822f, y = 0.244f .. 0.558f)
+    const auto leftPanel  = juce::Rectangle<float> (0.312f * w, 0.252f * h, 0.248f * w, 0.298f * h);
+    const auto rightPanel = juce::Rectangle<float> (0.567f * w, 0.252f * h, 0.248f * w, 0.298f * h);
 
     switch (currentTab)
     {
@@ -2845,53 +3044,57 @@ void NeomorphX1AudioProcessorEditor::resized()
     const float w = static_cast<float> (getWidth());
     const float h = static_cast<float> (getHeight());
 
-    // Unteres Status-Strip-Panel (exakte Benutzer-Koordinaten)
+    // Unteres Status-Strip-Panel
     bottomStripBounds = juce::Rectangle<float> (0.2661f * w,
                                                 0.9016f * h,
                                                 (0.9113f - 0.2661f) * w,
                                                 (0.9481f - 0.9016f) * h);
 
-    // --- Top-Bar Preset-Controls ---
-    presetBox.setBounds        (juce::roundToInt (0.3125f * w), juce::roundToInt (0.0175f * h),
-                                juce::roundToInt (0.1680f * w), juce::roundToInt (0.0445f * h));
-    savePresetButton.setBounds (juce::roundToInt (0.4875f * w), juce::roundToInt (0.0155f * h),
-                                juce::roundToInt (0.0645f * w), juce::roundToInt (0.0480f * h));
-    loadPresetButton.setBounds (juce::roundToInt (0.5565f * w), juce::roundToInt (0.0155f * h),
-                                juce::roundToInt (0.0645f * w), juce::roundToInt (0.0480f * h));
-    panicButton.setBounds      (juce::roundToInt (0.6255f * w), juce::roundToInt (0.0155f * h),
-                                juce::roundToInt (0.0670f * w), juce::roundToInt (0.0480f * h));
-    prevPresetButton.setBounds (juce::roundToInt (0.6970f * w), juce::roundToInt (0.0155f * h),
+    // --- Top-Bar Preset-Controls (exakt auf background_main) ---
+    savePresetButton.setBounds (juce::roundToInt (0.1620f * w), juce::roundToInt (0.0150f * h),
+                                juce::roundToInt (0.0530f * w), juce::roundToInt (0.0480f * h));
+    loadPresetButton.setBounds (juce::roundToInt (0.2220f * w), juce::roundToInt (0.0150f * h),
+                                juce::roundToInt (0.0530f * w), juce::roundToInt (0.0480f * h));
+    panicButton.setBounds      (juce::roundToInt (0.2820f * w), juce::roundToInt (0.0150f * h),
+                                juce::roundToInt (0.0580f * w), juce::roundToInt (0.0480f * h));
+
+    presetBox.setBounds        (juce::roundToInt (0.3650f * w), juce::roundToInt (0.0170f * h),
+                                juce::roundToInt (0.2300f * w), juce::roundToInt (0.0445f * h));
+
+    prevPresetButton.setBounds (juce::roundToInt (0.6040f * w), juce::roundToInt (0.0150f * h),
                                 juce::roundToInt (0.0250f * w), juce::roundToInt (0.0480f * h));
-    nextPresetButton.setBounds (juce::roundToInt (0.7235f * w), juce::roundToInt (0.0155f * h),
+    nextPresetButton.setBounds (juce::roundToInt (0.6310f * w), juce::roundToInt (0.0150f * h),
                                 juce::roundToInt (0.0250f * w), juce::roundToInt (0.0480f * h));
 
-    const float tabStartX = 0.2893f * w;
-    const float tabTotalW = 0.4152f * w;
+    // --- 6 Tabs (x = 0.305f .. 0.822f, y = 0.193f .. 0.236f) ---
+    const float tabStartX = 0.3050f * w;
+    const float tabTotalW = 0.5170f * w;
     const float singleW   = tabTotalW / static_cast<float> (ActiveTab::NumTabs);
 
     for (size_t i = 0; i < tabButtons.size(); ++i)
     {
         tabButtons[i].setBounds (juce::roundToInt (tabStartX + static_cast<float> (i) * singleW),
-                                 juce::roundToInt (0.0889f * h),
+                                 juce::roundToInt (0.1930f * h),
                                  juce::roundToInt (singleW),
-                                 juce::roundToInt (0.0556f * h));
+                                 juce::roundToInt (0.0430f * h));
     }
 
-    settingsButton.setBounds (juce::roundToInt (0.946f * w),
+    settingsButton.setBounds (juce::roundToInt (0.935f * w),
                               juce::roundToInt (0.012f * h),
-                              juce::roundToInt (0.036f * w),
-                              juce::roundToInt (0.060f * h));
+                              juce::roundToInt (0.042f * w),
+                              juce::roundToInt (0.056f * h));
 
+    // --- 8 Scene Hardware-Buttons ---
     const int btnWidth  = juce::roundToInt (0.0365f * w);
     const int btnHeight = juce::roundToInt (0.0350f * h);
 
     constexpr float sceneBtnX[8] = {
-        0.4795f, 0.5188f, 0.5580f, 0.5991f,
-        0.4795f, 0.5188f, 0.5580f, 0.5991f
+        0.4800f, 0.5195f, 0.5590f, 0.6000f,
+        0.4800f, 0.5195f, 0.5590f, 0.6000f
     };
     constexpr float sceneBtnY[8] = {
-        0.6063f, 0.6063f, 0.6063f, 0.6063f,
-        0.8492f, 0.8492f, 0.8492f, 0.8492f
+        0.6380f, 0.6380f, 0.6380f, 0.6380f,
+        0.7420f, 0.7420f, 0.7420f, 0.7420f
     };
 
     for (size_t i = 0; i < 8; ++i)
@@ -2902,23 +3105,41 @@ void NeomorphX1AudioProcessorEditor::resized()
                                            btnHeight);
     }
 
-    const int lcdBtnW = juce::roundToInt (0.0420f * w);
-    const int lcdBtnH = juce::roundToInt (0.0300f * h);
-    const int lcdBtnX = juce::roundToInt (0.6410f * w);
-    constexpr float lcdBtnY[4] = { 0.6460f, 0.6920f, 0.7380f, 0.7840f };
+    // --- 4 LCD Page-Buttons unter dem LCD-Display (PATCH, MORPH, ASSIGN, SYSTEM) ---
+    const int lcdBtnW = juce::roundToInt (0.0460f * w);
+    const int lcdBtnH = juce::roundToInt (0.0480f * h);
+    const int lcdBtnY = juce::roundToInt (0.4380f * h);
+    constexpr float lcdBtnX[4] = { 0.0720f, 0.1270f, 0.1820f, 0.2370f };
 
     for (size_t i = 0; i < 4; ++i)
     {
-        lcdPageButtons[i].setBounds (lcdBtnX,
-                                     juce::roundToInt (lcdBtnY[i] * h),
+        lcdPageButtons[i].setBounds (juce::roundToInt (lcdBtnX[i] * w),
+                                     lcdBtnY,
                                      lcdBtnW,
                                      lcdBtnH);
     }
 
-    constexpr float colX[2] = { 0.766f, 0.863f };
-    constexpr float rowY[5] = { 0.165f, 0.335f, 0.505f, 0.675f, 0.822f };
+    // --- 10er-Nummernblock unten rechts (1..9, CLR, 0, ENT) ---
+    constexpr float kpColX[3] = { 0.6690f, 0.7165f, 0.7640f };
+    constexpr float kpRowY[4] = { 0.6060f, 0.6720f, 0.7380f, 0.8040f };
+    const int kpBtnW = juce::roundToInt (0.0385f * w);
+    const int kpBtnH = juce::roundToInt (0.0490f * h);
 
-    const int knobSize = juce::roundToInt (0.056f * w);
+    for (size_t i = 0; i < 12; ++i)
+    {
+        const size_t row = i / 3;
+        const size_t col = i % 3;
+        keypadButtons[i].setBounds (juce::roundToInt (kpColX[col] * w),
+                                    juce::roundToInt (kpRowY[row] * h),
+                                    kpBtnW,
+                                    kpBtnH);
+    }
+
+    // --- 10 rechte Drehregler (VOL, PAN, A1..A8) ---
+    constexpr float colX[2] = { 0.861f, 0.931f };
+    constexpr float rowY[5] = { 0.193f, 0.343f, 0.493f, 0.643f, 0.793f };
+
+    const int knobSize = juce::roundToInt (0.052f * w);
 
     for (size_t i = 0; i < matrixKnobs.size(); ++i)
     {
@@ -2931,6 +3152,7 @@ void NeomorphX1AudioProcessorEditor::resized()
         matrixKnobs[i].setBounds (cx - knobSize / 2, cy - knobSize / 2, knobSize, knobSize);
     }
 
+    // --- Scene Faders ---
     constexpr float faderX[3] = { 0.278f, 0.342f, 0.405f };
     const int faderTop    = juce::roundToInt (0.605f * h);
     const int faderWidth  = juce::roundToInt (0.036f * w);
@@ -2942,6 +3164,7 @@ void NeomorphX1AudioProcessorEditor::resized()
         sceneFaders[i].setBounds (cx - faderWidth / 2, faderTop, faderWidth, faderHeight);
     }
 
+    // --- Pitch & Mod Wheel ---
     const int wheelTop    = juce::roundToInt (0.588f * h);
     const int wheelWidth  = juce::roundToInt (0.044f * w);
     const int wheelHeight = juce::roundToInt (0.295f * h);
@@ -2949,15 +3172,16 @@ void NeomorphX1AudioProcessorEditor::resized()
     pitchWheel.setBounds (juce::roundToInt (0.092f * w) - wheelWidth / 2, wheelTop, wheelWidth, wheelHeight);
     modWheel.setBounds   (juce::roundToInt (0.172f * w) - wheelWidth / 2, wheelTop, wheelWidth, wheelHeight);
 
-    const float panelX[2]   = { 0.273f * w, 0.503f * w };
-    const float panelTop    = 0.158f * h;
-    const float panelW      = 0.218f * w;
-    const float panelH      = 0.422f * h;
+    // --- Tab-Inhaltspanels im großen Cyan-Rahmen ---
+    const float panelX[2]   = { 0.312f * w, 0.567f * w };
+    const float panelTop    = 0.252f * h;
+    const float panelW      = 0.248f * w;
+    const float panelH      = 0.298f * h;
 
     // --- Tab 1: Oscillators Layout ---
-    const int oscKnobSize = juce::roundToInt (0.043f * w);
-    const float oscRow1Y  = panelTop + panelH * 0.45f;
-    const float oscRow2Y  = panelTop + panelH * 0.77f;
+    const int oscKnobSize = juce::roundToInt (0.036f * w);
+    const float oscRow1Y  = panelTop + panelH * 0.48f;
+    const float oscRow2Y  = panelTop + panelH * 0.78f;
 
     for (size_t i = 0; i < oscControls.size(); ++i)
     {
@@ -2965,9 +3189,9 @@ void NeomorphX1AudioProcessorEditor::resized()
         const float px = panelX[i];
 
         osc.waveBox.setBounds (juce::roundToInt (px + 10.0f),
-                               juce::roundToInt (panelTop + panelH * 0.145f),
-                               juce::roundToInt (panelW * 0.51f),
-                               juce::roundToInt (panelH * 0.125f));
+                               juce::roundToInt (panelTop + panelH * 0.16f),
+                               juce::roundToInt (panelW * 0.50f),
+                               juce::roundToInt (panelH * 0.135f));
 
         juce::Slider* row1[4] = { &osc.octaveKnob, &osc.semiKnob, &osc.detuneKnob, &osc.positionKnob };
         juce::Slider* row2[4] = { &osc.morphKnob,  &osc.phaseKnob, &osc.panKnob,   &osc.levelKnob };
@@ -2989,17 +3213,17 @@ void NeomorphX1AudioProcessorEditor::resized()
     const float rightX = panelX[1];
 
     filterControls.typeBox.setBounds (juce::roundToInt (leftX + 10.0f),
-                                      juce::roundToInt (panelTop + panelH * 0.14f),
+                                      juce::roundToInt (panelTop + panelH * 0.16f),
                                       juce::roundToInt (panelW * 0.46f),
-                                      juce::roundToInt (panelH * 0.115f));
+                                      juce::roundToInt (panelH * 0.13f));
 
     filterControls.routingBox.setBounds (juce::roundToInt (leftX + 10.0f),
-                                         juce::roundToInt (panelTop + panelH * 0.28f),
+                                         juce::roundToInt (panelTop + panelH * 0.32f),
                                          juce::roundToInt (panelW * 0.46f),
-                                         juce::roundToInt (panelH * 0.115f));
+                                         juce::roundToInt (panelH * 0.13f));
 
-    const int bigFltKnob = juce::roundToInt (0.056f * w);
-    const float fltKnobY = panelTop + panelH * 0.67f;
+    const int bigFltKnob = juce::roundToInt (0.046f * w);
+    const float fltKnobY = panelTop + panelH * 0.70f;
 
     filterControls.cutoffKnob.setBounds (juce::roundToInt (leftX + panelW * 0.30f) - bigFltKnob / 2,
                                          juce::roundToInt (fltKnobY) - bigFltKnob / 2,
@@ -3009,9 +3233,9 @@ void NeomorphX1AudioProcessorEditor::resized()
                                             juce::roundToInt (fltKnobY) - bigFltKnob / 2,
                                             bigFltKnob, bigFltKnob);
 
-    const int modFltKnob = juce::roundToInt (0.048f * w);
-    const float rRow1Y   = panelTop + panelH * 0.34f;
-    const float rRow2Y   = panelTop + panelH * 0.72f;
+    const int modFltKnob = juce::roundToInt (0.040f * w);
+    const float rRow1Y   = panelTop + panelH * 0.36f;
+    const float rRow2Y   = panelTop + panelH * 0.73f;
 
     filterControls.driveKnob.setBounds    (juce::roundToInt (rightX + panelW * 0.30f) - modFltKnob / 2,
                                            juce::roundToInt (rRow1Y) - modFltKnob / 2, modFltKnob, modFltKnob);
@@ -3023,8 +3247,8 @@ void NeomorphX1AudioProcessorEditor::resized()
                                            juce::roundToInt (rRow2Y) - modFltKnob / 2, modFltKnob, modFltKnob);
 
     // --- Tab 3: Envelopes Layout ---
-    const int envKnobSize = juce::roundToInt (0.044f * w);
-    const float envKnobY  = panelTop + panelH * 0.76f;
+    const int envKnobSize = juce::roundToInt (0.036f * w);
+    const float envKnobY  = panelTop + panelH * 0.77f;
 
     for (size_t i = 0; i < envControls.size(); ++i)
     {
@@ -3043,27 +3267,27 @@ void NeomorphX1AudioProcessorEditor::resized()
 
     // --- Tab 4: Free EG Layout ---
     freeEgControls.canvas.setBounds (juce::roundToInt (leftX + 10.0f),
-                                     juce::roundToInt (panelTop + panelH * 0.14f),
+                                     juce::roundToInt (panelTop + panelH * 0.16f),
                                      juce::roundToInt (panelW - 20.0f),
-                                     juce::roundToInt (panelH * 0.64f));
+                                     juce::roundToInt (panelH * 0.60f));
 
     freeEgControls.targetBox.setBounds (juce::roundToInt (leftX + panelW * 0.34f),
-                                        juce::roundToInt (panelTop + panelH * 0.82f),
+                                        juce::roundToInt (panelTop + panelH * 0.80f),
                                         juce::roundToInt (panelW * 0.61f),
-                                        juce::roundToInt (panelH * 0.125f));
+                                        juce::roundToInt (panelH * 0.14f));
 
     freeEgControls.modeBox.setBounds (juce::roundToInt (rightX + 10.0f),
-                                      juce::roundToInt (panelTop + panelH * 0.15f),
+                                      juce::roundToInt (panelTop + panelH * 0.16f),
                                       juce::roundToInt (panelW - 20.0f),
-                                      juce::roundToInt (panelH * 0.135f));
+                                      juce::roundToInt (panelH * 0.145f));
 
     freeEgControls.syncBox.setBounds (juce::roundToInt (rightX + 10.0f),
-                                      juce::roundToInt (panelTop + panelH * 0.32f),
+                                      juce::roundToInt (panelTop + panelH * 0.34f),
                                       juce::roundToInt (panelW - 20.0f),
-                                      juce::roundToInt (panelH * 0.135f));
+                                      juce::roundToInt (panelH * 0.145f));
 
-    const int fegKnobSize = juce::roundToInt (0.046f * w);
-    const float fegKnobY  = panelTop + panelH * 0.69f;
+    const int fegKnobSize = juce::roundToInt (0.038f * w);
+    const float fegKnobY  = panelTop + panelH * 0.70f;
 
     freeEgControls.timeKnob.setBounds   (juce::roundToInt (rightX + panelW * 0.20f) - fegKnobSize / 2,
                                          juce::roundToInt (fegKnobY) - fegKnobSize / 2, fegKnobSize, fegKnobSize);
@@ -3074,27 +3298,27 @@ void NeomorphX1AudioProcessorEditor::resized()
 
     // --- Tab 5: Step Sequencer Layout ---
     stepSeqControls.canvas.setBounds (juce::roundToInt (leftX + 10.0f),
-                                      juce::roundToInt (panelTop + panelH * 0.14f),
+                                      juce::roundToInt (panelTop + panelH * 0.16f),
                                       juce::roundToInt (panelW - 20.0f),
-                                      juce::roundToInt (panelH * 0.64f));
+                                      juce::roundToInt (panelH * 0.60f));
 
     stepSeqControls.modeBox.setBounds (juce::roundToInt (leftX + 10.0f),
-                                       juce::roundToInt (panelTop + panelH * 0.82f),
+                                       juce::roundToInt (panelTop + panelH * 0.80f),
                                        juce::roundToInt (panelW * 0.53f),
-                                       juce::roundToInt (panelH * 0.125f));
+                                       juce::roundToInt (panelH * 0.14f));
 
     stepSeqControls.lengthBox.setBounds (juce::roundToInt (leftX + panelW * 0.57f),
-                                         juce::roundToInt (panelTop + panelH * 0.82f),
+                                         juce::roundToInt (panelTop + panelH * 0.80f),
                                          juce::roundToInt (panelW * 0.38f),
-                                         juce::roundToInt (panelH * 0.125f));
+                                         juce::roundToInt (panelH * 0.14f));
 
     stepSeqControls.rateBox.setBounds (juce::roundToInt (rightX + panelW * 0.30f),
-                                       juce::roundToInt (panelTop + panelH * 0.16f),
+                                       juce::roundToInt (panelTop + panelH * 0.17f),
                                        juce::roundToInt (panelW * 0.65f),
-                                       juce::roundToInt (panelH * 0.135f));
+                                       juce::roundToInt (panelH * 0.145f));
 
-    const int seqKnobSize = juce::roundToInt (0.046f * w);
-    const float seqKnobY  = panelTop + panelH * 0.58f;
+    const int seqKnobSize = juce::roundToInt (0.038f * w);
+    const float seqKnobY  = panelTop + panelH * 0.60f;
 
     stepSeqControls.gateKnob.setBounds   (juce::roundToInt (rightX + panelW * 0.20f) - seqKnobSize / 2,
                                           juce::roundToInt (seqKnobY) - seqKnobSize / 2, seqKnobSize, seqKnobSize);
@@ -3104,10 +3328,10 @@ void NeomorphX1AudioProcessorEditor::resized()
                                           juce::roundToInt (seqKnobY) - seqKnobSize / 2, seqKnobSize, seqKnobSize);
 
     // --- Tab 6: Mod Matrix & LFO 1 Layout ---
-    const int modAmtKnobSize = juce::roundToInt (0.031f * w);
-    const float slotStartY   = panelTop + panelH * 0.145f;
-    const float slotPitchY   = panelH * 0.205f;
-    const int boxH           = juce::roundToInt (panelH * 0.125f);
+    const int modAmtKnobSize = juce::roundToInt (0.026f * w);
+    const float slotStartY   = panelTop + panelH * 0.165f;
+    const float slotPitchY   = panelH * 0.200f;
+    const int boxH           = juce::roundToInt (panelH * 0.135f);
 
     for (size_t m = 0; m < 4; ++m)
     {
@@ -3130,12 +3354,12 @@ void NeomorphX1AudioProcessorEditor::resized()
     }
 
     modMatrixControls.lfoSyncBox.setBounds (juce::roundToInt (rightX + panelW * 0.38f),
-                                            juce::roundToInt (panelTop + panelH * 0.15f),
+                                            juce::roundToInt (panelTop + panelH * 0.16f),
                                             juce::roundToInt (panelW * 0.57f),
-                                            juce::roundToInt (panelH * 0.130f));
+                                            juce::roundToInt (panelH * 0.140f));
 
-    const int lfoKnobSize = juce::roundToInt (0.044f * w);
-    const float lfoKnobY  = panelTop + panelH * 0.52f;
+    const int lfoKnobSize = juce::roundToInt (0.036f * w);
+    const float lfoKnobY  = panelTop + panelH * 0.54f;
 
     modMatrixControls.lfoRateKnob.setBounds  (juce::roundToInt (rightX + panelW * 0.20f) - lfoKnobSize / 2,
                                               juce::roundToInt (lfoKnobY) - lfoKnobSize / 2, lfoKnobSize, lfoKnobSize);
