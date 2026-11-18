@@ -3051,10 +3051,10 @@ void NeomorphX1AudioProcessorEditor::resized()
                                                 (0.9481f - 0.9016f) * h);
 
     // 0. Top-Bar Preset-Verwaltung (exakte Koordinaten)
-    const float presetLeft   = 0.3890f * w;
-    const float presetTop    = 0.0215f * h;
+    const float presetLeft   = 0.3600f * w;
+    const float presetTop    = 0.0190f * h;
     const float presetRight  = 0.5965f * w;
-    const float presetBottom = 0.0520f * h;
+    const float presetBottom = 0.0500f * h;
     presetBox.setBounds (
         juce::roundToInt (presetLeft),
         juce::roundToInt (presetTop),
