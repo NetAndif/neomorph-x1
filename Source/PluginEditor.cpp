@@ -986,7 +986,7 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
         "Osc 1 Pitch", "Osc 2 Pitch", "Osc 1+2 Pitch",
         "Osc 1 Position", "Osc 2 Position", "Osc 1+2 Morph",
         "Osc 1 Level", "Osc 2 Level",
-        "Scene Morph", "LFO 1 Rate"
+        "Scene Morph", "LFO 1 Rate", "LFO 1 Depth"
     };
 
     for (size_t m = 0; m < 4; ++m)
@@ -2585,10 +2585,10 @@ void NeomorphX1AudioProcessorEditor::resized()
     const float h = static_cast<float> (getHeight());
 
     // 0. Top-Bar Preset-Verwaltung
-    const float presetLeft   = 0.3820f * w;
-    const float presetTop    = 0.0108f * h;
-    const float presetRight  = 0.5980f * w;
-    const float presetBottom = 0.0500f * h;
+    const float presetLeft   = 0.3815f * w;
+    const float presetTop    = 0.0105f * h;
+    const float presetRight  = 0.5965f * w;
+    const float presetBottom = 0.0480f * h;
     presetBox.setBounds (
         juce::roundToInt (presetLeft),
         juce::roundToInt (presetTop),

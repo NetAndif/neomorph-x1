@@ -326,7 +326,7 @@ namespace
 
             for (int sampleIdx = 0; sampleIdx < numSamples; ++sampleIdx)
             {
-                std::array<float, 2> ampEnvArr { 0.0f, 0.0f };
+				std::array<float, 2> ampEnvArr { 0.0f, 0.0f };
                 std::array<float, 2> modEnvArr { 0.0f, 0.0f };
                 std::array<float, 2> fegRawVal { 0.0f, 0.0f };
                 std::array<int, 2>   fegTarget { 0, 0 };
@@ -335,27 +335,11 @@ namespace
                 std::array<float, 2> lfoSine   { 0.0f, 0.0f };
                 std::array<float, 2> lfoTri    { 0.0f, 0.0f };
                 std::array<float, 2> lfoSaw    { 0.0f, 0.0f };
-                std::array<float, 2> lfoRateMod { 0.0f, 0.0f };
 
                 float morphModOffset = 0.0f;
+                const float keyNorm  = (static_cast<float> (currentMidiNote) - 60.0f) / 36.0f;
 
-                for (size_t s = 0; s < 2; ++s)
-                {
-                    const auto& scP = cache.scenes[s];
-                    for (size_t m = 0; m < 4; ++m)
-                    {
-                        if (static_cast<int> (scP.modSlots[m].dst->load()) == 12)
-                        {
-                            const int srcIdx = static_cast<int> (scP.modSlots[m].src->load());
-                            if (srcIdx >= 11 && srcIdx <= 18)
-                            {
-                                const float knobV = cache.matrixKnobs[static_cast<size_t> (srcIdx - 9)]->load();
-                                lfoRateMod[s] += knobV * scP.modSlots[m].amount->load();
-                            }
-                        }
-                    }
-                }
-
+                // 1. Envelopes, Free EG & Step Sequencer pro Scene auswerten
                 for (size_t s = 0; s < 2; ++s)
                 {
                     auto& state     = sceneStates[s];
@@ -433,12 +417,55 @@ namespace
                         if (seqMode[s] == 4)
                             morphModOffset += seqRawVal[s] * 0.5f;
                     }
+                }
+
+                // 2. LFO 1 Rate & Depth Modulationen aus der Matrix sammeln und LFO 1 berechnen
+                for (size_t s = 0; s < 2; ++s)
+                {
+                    auto& state     = sceneStates[s];
+                    const auto& scP = cache.scenes[s];
+
+                    float lfoRateMod  = 0.0f;
+                    float lfoDepthMod = 0.0f;
+
+                    for (size_t m = 0; m < 4; ++m)
+                    {
+                        const int dstIdx = static_cast<int> (scP.modSlots[m].dst->load());
+                        if (dstIdx != 12 && dstIdx != 13)
+                            continue;
+
+                        const int srcIdx = static_cast<int> (scP.modSlots[m].src->load());
+                        const float amt  = scP.modSlots[m].amount->load();
+                        if (srcIdx == 0 || std::abs (amt) < 0.0001f)
+                            continue;
+
+                        float srcVal = 0.0f;
+                        switch (srcIdx)
+                        {
+                            case 4:  srcVal = modWheel;     break;
+                            case 5:  srcVal = noteVelocity; break;
+                            case 6:  srcVal = keyNorm;      break;
+                            case 7:  srcVal = ampEnvArr[s]; break;
+                            case 8:  srcVal = modEnvArr[s]; break;
+                            case 9:  srcVal = fegRawVal[s]; break;
+                            case 10: srcVal = seqRawVal[s]; break;
+                            default:
+                                if (srcIdx >= 11 && srcIdx <= 18)
+                                    srcVal = cache.matrixKnobs[static_cast<size_t> (srcIdx - 9)]->load();
+                                break;
+                        }
+
+                        if (dstIdx == 12)
+                            lfoRateMod += srcVal * amt;
+                        else if (dstIdx == 13)
+                            lfoDepthMod += srcVal * amt;
+                    }
 
                     const int lfoSync  = static_cast<int> (scP.lfo1.sync->load());
                     const float fadeT  = scP.lfo1.fade->load();
-                    const float depth  = scP.lfo1.depth->load();
+                    const float depth  = juce::jlimit (0.0f, 1.0f, scP.lfo1.depth->load() + lfoDepthMod);
 
-                    float lfoFreqHz = scP.lfo1.rate->load() * std::pow (2.0f, lfoRateMod[s] * 3.0f);
+                    float lfoFreqHz = scP.lfo1.rate->load() * std::pow (2.0f, lfoRateMod * 3.0f);
                     if (lfoSync > 0 && hostBpm > 1.0f)
                     {
                         const float periodSec = (60.0f / hostBpm) * lfoBeatDivs[juce::jlimit (0, 5, lfoSync)];
@@ -478,8 +505,6 @@ namespace
                     float osc2Lvl   = 0.0f;
                 };
                 std::array<SceneModAccum, 2> matMod {};
-
-                const float keyNorm = (static_cast<float> (currentMidiNote) - 60.0f) / 36.0f;
 
                 for (size_t s = 0; s < 2; ++s)
                 {
@@ -572,7 +597,7 @@ namespace
                         const float slotLvlMod   = (o == 0) ? acc.osc1Lvl  : acc.osc2Lvl;
 
                         const float pos  = juce::jlimit (0.0f, 1.0f, oscP.position->load() + fegPosMod + seqPosMod + slotPosMod);
-                        const float mrph = juce::jlimit (0.0f, 1.0f, oscP.morph->load() + modWheel * 0.35f + fegMorphMod + acc.oscMorph);
+                        const float mrph = juce::jlimit (0.0f, 1.0f, oscP.morph->load() + fegMorphMod + acc.oscMorph);
                         const float pan  = oscP.pan->load();
                         const float lvl  = juce::jlimit (0.0f, 1.25f, oscP.level->load() + slotLvlMod);
 
@@ -646,7 +671,7 @@ namespace
                         const float keyOctaves = ((static_cast<float> (currentMidiNote) - 60.0f) / 12.0f) * keytrack;
                         const float envOctaves = modEnvArr[s] * envAmt * 5.0f;
                         const float velOctaves = (noteVelocity - 0.5f) * velSens * 3.0f;
-                        const float modOctaves = modWheel * 2.5f + fegCutMod + seqCutMod + acc.cutoffOct;
+                        const float modOctaves = fegCutMod + seqCutMod + acc.cutoffOct;
 
                         const float modCut = baseCut * std::pow (2.0f, keyOctaves + envOctaves + velOctaves + modOctaves);
 
@@ -1192,7 +1217,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
             "Osc 1 Pitch", "Osc 2 Pitch", "Osc 1+2 Pitch",
             "Osc 1 Position", "Osc 2 Position", "Osc 1+2 Morph",
             "Osc 1 Level", "Osc 2 Level",
-            "Scene Morph", "LFO 1 Rate"
+            "Scene Morph", "LFO 1 Rate", "LFO 1 Depth"
         };
 
         for (int m = 0; m < 4; ++m)
