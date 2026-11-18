@@ -2404,7 +2404,7 @@ void NeomorphX1AudioProcessorEditor::drawBottomStatusStrip (juce::Graphics& g, j
 void NeomorphX1AudioProcessorEditor::drawSceneLeds (juce::Graphics& g, float w, float h)
 {
     constexpr float ledX[4] = { 0.4976f, 0.5369f, 0.5762f, 0.6173f };
-    const float ledY        = 0.6250f * h;
+    const float ledY        = 0.6180f * h;
     const float ledRadius   = 0.0042f * w;
 
     const bool ledActive[4] = {
@@ -3052,7 +3052,7 @@ void NeomorphX1AudioProcessorEditor::resized()
 
     // 0. Top-Bar Preset-Verwaltung (exakte Koordinaten)
     const float presetLeft   = 0.3600f * w;
-    const float presetTop    = 0.0190f * h;
+    const float presetTop    = 0.0145f * h;
     const float presetRight  = 0.5965f * w;
     const float presetBottom = 0.0500f * h;
     presetBox.setBounds (

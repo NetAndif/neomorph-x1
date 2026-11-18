@@ -965,7 +965,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
             params.push_back (std::make_unique<juce::AudioParameterFloat> (
                 juce::ParameterID { prefix + "detune", 1 }, label + "Detune",
                 juce::NormalisableRange<float> (-50.0f, 50.0f, 0.1f),
-                (osc == 2) ? 7.0f : 0.0f));
+                (osc == 2) ? 0.0f : 0.0f));
 
             params.push_back (std::make_unique<juce::AudioParameterFloat> (
                 juce::ParameterID { prefix + "position", 1 }, label + "Position",
