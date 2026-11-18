@@ -378,20 +378,20 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
     };
     addAndMakeVisible (presetBox);
 
-	savePresetButton.setAlpha (0.0f);
+    savePresetButton.setAlpha (0.0f);
     savePresetButton.setMouseCursor (juce::MouseCursor::PointingHandCursor);
     savePresetButton.setTooltip ("Save Preset (Right-Click: Save As...)");
     savePresetButton.onClick = [this] { handleSavePresetClick (false); };
     savePresetButton.onRightClick = [this] { handleSavePresetClick (true); };
     addAndMakeVisible (savePresetButton);
 
-	loadPresetButton.setAlpha (0.0f);
+    loadPresetButton.setAlpha (0.0f);
     loadPresetButton.setMouseCursor (juce::MouseCursor::PointingHandCursor);
     loadPresetButton.setTooltip ("Load / Import External Preset (.xml)");
     loadPresetButton.onClick = [this] { handleLoadPresetClick(); };
     addAndMakeVisible (loadPresetButton);
 
-	panicButton.setAlpha (0.0f);
+    panicButton.setAlpha (0.0f);
     panicButton.setMouseCursor (juce::MouseCursor::PointingHandCursor);
     panicButton.setTooltip ("All Notes Off & Reset Audio Engine");
     panicButton.onClick = [this] { handlePanicClick(); };
@@ -1156,7 +1156,6 @@ void NeomorphX1AudioProcessorEditor::refreshPresetList()
 
 void NeomorphX1AudioProcessorEditor::handleSavePresetClick (bool forceSaveAsDialog)
 {
-    // Wenn das Preset bereits unter eigenem Namen gespeichert ist und kein "Save As" angefordert wurde: direkt überschreiben
     if (! forceSaveAsDialog && audioProcessor.isCurrentPresetSaved())
     {
         const auto name = audioProcessor.getCurrentPresetName();
@@ -1235,6 +1234,8 @@ void NeomorphX1AudioProcessorEditor::handleLoadPresetClick()
 void NeomorphX1AudioProcessorEditor::handlePanicClick()
 {
     audioProcessor.panicReset();
+    smoothedLevelL = smoothedLevelR = 0.0f;
+    peakHoldL = peakHoldR = 0.0f;
     stepSeqControls.canvas.repaint();
     triggerLcdNotification ("PANIC // RESET", "ALL VOICES CLEARED");
 }
@@ -1255,22 +1256,13 @@ void NeomorphX1AudioProcessorEditor::stepPreset (int delta)
 
 void NeomorphX1AudioProcessorEditor::timerCallback()
 {
-    bool needsRepaint = false;
-
-    // Falls die DAW im Hintergrund via setStateInformation ein Projekt geladen hat, Dropdown synchron halten
     if (presetBox.getText() != audioProcessor.getCurrentPresetName())
-    {
         refreshPresetList();
-        needsRepaint = true;
-    }
 
     if (showLcdNotify && lcdNotifyTicks > 0)
     {
         if (--lcdNotifyTicks == 0)
-        {
             showLcdNotify = false;
-            needsRepaint = true;
-        }
     }
 
     if (currentTab == ActiveTab::StepSequencer)
@@ -1284,15 +1276,55 @@ void NeomorphX1AudioProcessorEditor::timerCallback()
     }
     else if (currentTab == ActiveTab::ModMatrix)
     {
-        const float curLfo = audioProcessor.getLiveLfoValue (editingScene);
-        if (std::abs (curLfo - lastPaintedLfo) > 0.02f)
-        {
-            lastPaintedLfo = curLfo;
-            needsRepaint = true;
-        }
+        lastPaintedLfo = audioProcessor.getLiveLfoValue (editingScene);
     }
 
-    if (needsRepaint)
+    // Telemetrie für unteres Status-Strip-Panel aktualisieren
+    const float rawPeakL = audioProcessor.consumePeakLeft();
+    const float rawPeakR = audioProcessor.consumePeakRight();
+
+    smoothedLevelL = (rawPeakL > smoothedLevelL) ? rawPeakL : (smoothedLevelL * 0.84f);
+    smoothedLevelR = (rawPeakR > smoothedLevelR) ? rawPeakR : (smoothedLevelR * 0.84f);
+
+    if (rawPeakL >= peakHoldL)
+    {
+        peakHoldL      = rawPeakL;
+        peakHoldTicksL = 36;
+    }
+    else if (peakHoldTicksL > 0)
+    {
+        --peakHoldTicksL;
+    }
+    else
+    {
+        peakHoldL *= 0.90f;
+    }
+
+    if (rawPeakR >= peakHoldR)
+    {
+        peakHoldR      = rawPeakR;
+        peakHoldTicksR = 36;
+    }
+    else if (peakHoldTicksR > 0)
+    {
+        --peakHoldTicksR;
+    }
+    else
+    {
+        peakHoldR *= 0.90f;
+    }
+
+    if (audioProcessor.consumeMidiActivity())
+        midiLedHoldTicks = 6;
+    else if (midiLedHoldTicks > 0)
+        --midiLedHoldTicks;
+
+    audioProcessor.copyScopeSamples (scopeCache);
+
+    // Unteres Status-Panel (und ggf. LCD/LFO) kontinuierlich mit 30 Hz neu zeichnen
+    if (! bottomStripBounds.isEmpty())
+        repaint (bottomStripBounds.toNearestInt().expanded (2));
+    else
         repaint();
 }
 
@@ -1808,7 +1840,6 @@ void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rec
     g.drawText ("MODE: " + juce::String (pageNames[static_cast<int> (currentLcdPage)]),
                 topBar, juce::Justification::centredLeft);
 
-    // Rechts in der LCD-Statuszeile: Flags oder aktueller Preset-Name
     juce::String flags;
     if (sceneSolo) flags += "[SOLO] ";
     if (sceneLink) flags += "[LINK]";
@@ -1950,6 +1981,228 @@ void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rec
         default:
             break;
     }
+}
+
+// ==============================================================================
+// Unteres Status-Strip-Panel (0.2661f, 0.9016f bis 0.9113f, 0.9481f)
+// ==============================================================================
+void NeomorphX1AudioProcessorEditor::drawBottomStatusStrip (juce::Graphics& g, juce::Rectangle<float> stripBounds)
+{
+    const auto cyan    = juce::Colour::fromRGB (0, 240, 255);
+    const auto magenta = juce::Colour::fromRGB (255, 60, 180);
+    const auto amber   = juce::Colour::fromRGB (255, 205, 50);
+
+    // Dezente Scanlines über die gesamte Breite
+    g.setColour (cyan.withAlpha (0.035f));
+    for (float y = stripBounds.getY() + 1.0f; y < stripBounds.getBottom(); y += 3.0f)
+        g.drawHorizontalLine (juce::roundToInt (y), stripBounds.getX() + 2.0f, stripBounds.getRight() - 2.0f);
+
+    auto area = stripBounds.reduced (6.0f, 3.0f);
+    const float totalW = area.getWidth();
+
+    auto drawDivider = [&g, cyan] (float x, float top, float bottom)
+    {
+        g.setColour (cyan.withAlpha (0.22f));
+        g.drawVerticalLine (juce::roundToInt (x), top + 2.0f, bottom - 2.0f);
+    };
+
+    // --------------------------------------------------------------------------
+    // Sektion 1 (24%): MIDI Activity, Note/Velocity & 16-Voice-Monitor
+    // --------------------------------------------------------------------------
+    auto sec1 = area.removeFromLeft (totalW * 0.24f);
+    drawDivider (sec1.getRight(), area.getY(), area.getBottom());
+    sec1.removeFromRight (6.0f);
+
+    auto sec1Top = sec1.removeFromTop (sec1.getHeight() * 0.50f);
+    const float ledSize = 6.0f;
+    auto ledRect = juce::Rectangle<float> (sec1Top.getX(), sec1Top.getCentreY() - ledSize * 0.5f, ledSize, ledSize);
+
+    if (midiLedHoldTicks > 0)
+    {
+        g.setColour (magenta.withAlpha (0.35f));
+        g.fillEllipse (ledRect.expanded (2.5f));
+        g.setColour (magenta);
+    }
+    else
+    {
+        g.setColour (juce::Colour::fromRGB (35, 55, 75));
+    }
+    g.fillEllipse (ledRect);
+
+    const int lastNote = audioProcessor.getLastMidiNote();
+    const int lastVel  = audioProcessor.getLastMidiVelocity();
+    juce::String midiText = "MIDI // IDLE";
+    if (lastNote >= 0)
+    {
+        const auto noteName = juce::MidiMessage::getMidiNoteName (lastNote, true, true, 4);
+        midiText = juce::String::formatted ("MIDI // %s  V%03d", noteName.toRawUTF8(), lastVel);
+    }
+
+    g.setColour (lastNote >= 0 ? cyan : juce::Colour::fromRGB (120, 155, 180));
+    g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    g.drawText (midiText, sec1Top.withTrimmedLeft (10.0f), juce::Justification::centredLeft, true);
+
+    // Untere Zeile: 16 Voice-Segmente + Zähler
+    const int voices = juce::jlimit (0, 16, audioProcessor.getActiveVoiceCount());
+    auto voiceLabelRect = sec1.removeFromRight (52.0f);
+    g.setColour (voices > 0 ? magenta : juce::Colour::fromRGB (115, 145, 170));
+    g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+    g.drawText (juce::String::formatted ("V %02d/16", voices), voiceLabelRect, juce::Justification::centredRight);
+
+    auto segArea = sec1.reduced (0.0f, 3.0f);
+    const float segW = segArea.getWidth() / 16.0f;
+    for (int v = 0; v < 16; ++v)
+    {
+        auto seg = juce::Rectangle<float> (segArea.getX() + static_cast<float> (v) * segW + 1.0f,
+                                           segArea.getY(),
+                                           juce::jmax (1.5f, segW - 2.0f),
+                                           segArea.getHeight());
+        g.setColour (v < voices ? (v >= 12 ? amber : cyan)
+                                : juce::Colour::fromRGB (22, 34, 48));
+        g.fillRoundedRectangle (seg, 1.0f);
+    }
+
+    // --------------------------------------------------------------------------
+    // Sektion 2 (32%): Echtzeit-Oszilloskop / Morph-Vektor (Klick schaltet um)
+    // --------------------------------------------------------------------------
+    auto sec2 = area.removeFromLeft (totalW * 0.32f);
+    drawDivider (sec2.getRight(), area.getY(), area.getBottom());
+    sec2 = sec2.reduced (6.0f, 0.0f);
+    scopeClickArea = sec2;
+
+    g.setColour (juce::Colour::fromRGB (5, 9, 15).withAlpha (0.85f));
+    g.fillRoundedRectangle (sec2, 3.0f);
+    g.setColour (cyan.withAlpha (0.24f));
+    g.drawRoundedRectangle (sec2, 3.0f, 1.0f);
+
+    if (bottomStripMode == BottomStripMode::Oscilloscope)
+    {
+        const auto inner = sec2.reduced (3.0f, 2.0f);
+        g.setColour (cyan.withAlpha (0.14f));
+        g.drawHorizontalLine (juce::roundToInt (inner.getCentreY()), inner.getX(), inner.getRight());
+
+        juce::Path wavePath;
+        const int numPts = NeomorphX1AudioProcessor::scopeBufferSize;
+        for (int i = 0; i < numPts; ++i)
+        {
+            const float normX = static_cast<float> (i) / static_cast<float> (numPts - 1);
+            const float sVal  = juce::jlimit (-1.0f, 1.0f, scopeCache[static_cast<size_t> (i)] * 1.35f);
+            const float px    = inner.getX() + normX * inner.getWidth();
+            const float py    = inner.getCentreY() - sVal * (inner.getHeight() * 0.46f);
+
+            if (i == 0)
+                wavePath.startNewSubPath (px, py);
+            else
+                wavePath.lineTo (px, py);
+        }
+
+        g.setColour (cyan.withAlpha (0.26f));
+        g.strokePath (wavePath, juce::PathStrokeType (2.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour (cyan);
+        g.strokePath (wavePath, juce::PathStrokeType (1.3f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        g.setColour (cyan.withAlpha (0.55f));
+        g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+        g.drawText ("SCOPE", inner.reduced (2.0f, 0.0f), juce::Justification::topLeft);
+    }
+    else
+    {
+        const float effMorph = audioProcessor.getLiveEffectiveMorph();
+        const float s1Lvl    = static_cast<float> (sceneFaders[0].getValue());
+        const float s2Lvl    = static_cast<float> (sceneFaders[2].getValue());
+
+        auto inner = sec2.reduced (6.0f, 4.0f);
+        auto bar   = inner.removeFromBottom (inner.getHeight() * 0.44f);
+
+        g.setColour (cyan);
+        g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+        g.drawText (juce::String::formatted ("S1 %.0f%%", s1Lvl * (1.0f - effMorph) * 100.0f),
+                    inner, juce::Justification::centredLeft);
+
+        g.setColour (magenta);
+        g.drawText (juce::String::formatted ("S2 %.0f%%", s2Lvl * effMorph * 100.0f),
+                    inner, juce::Justification::centredRight);
+
+        g.setColour (juce::Colour::fromRGB (140, 180, 210));
+        g.drawText (juce::String::formatted ("MORPH %d%%", juce::roundToInt (effMorph * 100.0f)),
+                    inner, juce::Justification::centred);
+
+        g.setColour (juce::Colour::fromRGB (16, 24, 36));
+        g.fillRoundedRectangle (bar, 2.5f);
+
+        const float splitX = bar.getX() + bar.getWidth() * (1.0f - effMorph);
+        g.setColour (cyan.withAlpha (0.80f));
+        g.fillRoundedRectangle (bar.withRight (splitX), 2.0f);
+        g.setColour (magenta.withAlpha (0.80f));
+        g.fillRoundedRectangle (bar.withLeft (splitX), 2.0f);
+
+        g.setColour (juce::Colours::white);
+        g.fillRect (splitX - 1.0f, bar.getY(), 2.0f, bar.getHeight());
+    }
+
+    // --------------------------------------------------------------------------
+    // Sektion 3 (26%): Stereo Output Peak Meter L / R
+    // --------------------------------------------------------------------------
+    auto sec3 = area.removeFromLeft (totalW * 0.26f);
+    drawDivider (sec3.getRight(), area.getY(), area.getBottom());
+    sec3 = sec3.reduced (6.0f, 1.0f);
+
+    auto drawChannelMeter = [&g, cyan, magenta, amber] (juce::Rectangle<float> row,
+                                                        const char* chLabel,
+                                                        float level,
+                                                        float hold)
+    {
+        auto lblRect = row.removeFromLeft (14.0f);
+        g.setColour (juce::Colour::fromRGB (150, 190, 215));
+        g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+        g.drawText (chLabel, lblRect, juce::Justification::centredLeft);
+
+        auto meterRect = row.reduced (0.0f, 2.5f);
+        g.setColour (juce::Colour::fromRGB (8, 13, 20));
+        g.fillRoundedRectangle (meterRect, 2.0f);
+        g.setColour (juce::Colour::fromRGB (35, 55, 75).withAlpha (0.7f));
+        g.drawRoundedRectangle (meterRect, 2.0f, 1.0f);
+
+        const float clampedLvl  = juce::jlimit (0.0f, 1.0f, level);
+        const float clampedHold = juce::jlimit (0.0f, 1.0f, hold);
+
+        if (clampedLvl > 0.002f)
+        {
+            juce::ColourGradient grad (cyan, meterRect.getX(), meterRect.getCentreY(),
+                                       magenta, meterRect.getRight(), meterRect.getCentreY(), false);
+            grad.addColour (0.82, amber);
+            g.setGradientFill (grad);
+            g.fillRoundedRectangle (meterRect.withWidth (meterRect.getWidth() * clampedLvl), 2.0f);
+        }
+
+        if (clampedHold > 0.01f)
+        {
+            const float holdX = meterRect.getX() + meterRect.getWidth() * clampedHold;
+            g.setColour (clampedHold > 0.96f ? juce::Colour::fromRGB (255, 50, 70) : juce::Colours::white);
+            g.fillRect (holdX - 1.0f, meterRect.getY() + 1.0f, 2.0f, meterRect.getHeight() - 2.0f);
+        }
+    };
+
+    auto meterTop = sec3.removeFromTop (sec3.getHeight() * 0.50f);
+    drawChannelMeter (meterTop, "L", smoothedLevelL, peakHoldL);
+    drawChannelMeter (sec3,     "R", smoothedLevelR, peakHoldR);
+
+    // --------------------------------------------------------------------------
+    // Sektion 4 (Rest ~18%): Host BPM, Sample-Rate & DSP Status
+    // --------------------------------------------------------------------------
+    auto sec4 = area.withTrimmedLeft (6.0f);
+    const float bpm   = audioProcessor.getHostBpm();
+    const double srKhz = audioProcessor.getCurrentSampleRateHz() / 1000.0;
+
+    auto sec4Top = sec4.removeFromTop (sec4.getHeight() * 0.50f);
+    g.setColour (cyan);
+    g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    g.drawText (juce::String::formatted ("%.1f BPM // %.1f KHZ", bpm, srKhz),
+                sec4Top, juce::Justification::centredRight, true);
+
+    g.setColour (juce::Colour::fromRGB (60, 255, 150));
+    g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+    g.drawText ("DSP // ONLINE", sec4, juce::Justification::centredRight, true);
 }
 
 void NeomorphX1AudioProcessorEditor::drawSceneLeds (juce::Graphics& g, float w, float h)
@@ -2507,75 +2760,83 @@ void NeomorphX1AudioProcessorEditor::drawModMatrixPanels (juce::Graphics& g,
                                             rightBounds.getWidth() - 20.0f,
                                             rightBounds.getHeight() * 0.11f);
     g.setColour (juce::Colour::fromRGB (6, 10, 16));
-    g.fillRoundedRectangle (meterBox, 3.0f);
+    g.fillRoundedRectangle (meterBox, 4.0f);
     g.setColour (juce::Colour::fromRGB (35, 55, 75).withAlpha (0.7f));
-    g.drawRoundedRectangle (meterBox, 3.0f, 1.0f);
+    g.drawRoundedRectangle (meterBox, 4.0f, 1.0f);
 
-    const float lfoVal = audioProcessor.getLiveLfoValue (editingScene);
-    const float midX   = meterBox.getCentreX();
-    const float fillW  = (meterBox.getWidth() * 0.48f) * std::abs (lfoVal);
+    const float midX = meterBox.getCentreX();
+    g.setColour (cyanAccent.withAlpha (0.25f));
+    g.drawVerticalLine (juce::roundToInt (midX), meterBox.getY() + 2.0f, meterBox.getBottom() - 2.0f);
+
+    const float lfoVal = juce::jlimit (-1.0f, 1.0f, lastPaintedLfo);
+    const float barW   = std::abs (lfoVal) * (meterBox.getWidth() * 0.46f);
+    const float barX   = (lfoVal >= 0.0f) ? midX : (midX - barW);
 
     g.setColour (magentaAccent.withAlpha (0.85f));
-    if (lfoVal >= 0.0f)
-        g.fillRoundedRectangle (midX, meterBox.getY() + 2.0f, fillW, meterBox.getHeight() - 4.0f, 2.0f);
-    else
-        g.fillRoundedRectangle (midX - fillW, meterBox.getY() + 2.0f, fillW, meterBox.getHeight() - 4.0f, 2.0f);
+    g.fillRoundedRectangle (barX, meterBox.getY() + 3.0f, juce::jmax (2.0f, barW), meterBox.getHeight() - 6.0f, 2.0f);
 
-    g.setColour (juce::Colour::fromRGB (180, 215, 235));
+    g.setColour (juce::Colour::fromRGB (190, 220, 240));
     g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
-    g.drawText ("LFO 1 LIVE OUTPUT", meterBox, juce::Justification::centred);
+    g.drawText ("LFO 1 OUT", meterBox.reduced (6.0f, 0.0f), juce::Justification::centredLeft);
 }
 
 void NeomorphX1AudioProcessorEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (juce::Colour::fromRGB (10, 14, 22));
+    g.fillAll (juce::Colour::fromRGB (10, 13, 18));
 
-    auto bounds = getLocalBounds().toFloat();
-    const float w = bounds.getWidth();
-    const float h = bounds.getHeight();
+    const float w = static_cast<float> (getWidth());
+    const float h = static_cast<float> (getHeight());
 
     if (backgroundImage.isValid())
-        g.drawImage (backgroundImage, bounds, juce::RectanglePlacement::stretchToFit);
+        g.drawImage (backgroundImage, getLocalBounds().toFloat(), juce::RectanglePlacement::stretchToFit);
 
-    const auto& activeOverlay = tabImages[static_cast<size_t> (currentTab)];
-    if (activeOverlay.isValid())
-        g.drawImage (activeOverlay, bounds, juce::RectanglePlacement::stretchToFit);
+    const auto& activeImg = tabImages[static_cast<size_t> (currentTab)];
+    if (activeImg.isValid())
+    {
+        juce::Rectangle<float> tabDest (0.2893f * w, 0.0889f * h, 0.4152f * w, 0.0556f * h);
+        g.drawImage (activeImg, tabDest, juce::RectanglePlacement::stretchToFit);
+    }
 
-    drawLcdScreen (g, juce::Rectangle<float> (0.0774f * w,
-                                              0.2243f * h,
-                                              (0.2964f - 0.0774f) * w,
-                                              (0.4053f - 0.2243f) * h));
-
+    drawLcdScreen (g, juce::Rectangle<float> (0.4535f * w, 0.6400f * h, 0.1755f * w, 0.1790f * h));
     drawSceneLeds (g, w, h);
 
-    const auto leftPanel  = juce::Rectangle<float> (0.3181f * w, 0.2673f * h, 0.2380f * w, 0.2700f * h);
-    const auto rightPanel = juce::Rectangle<float> (0.5662f * w, 0.2673f * h, 0.2380f * w, 0.2700f * h);
+    if (! bottomStripBounds.isEmpty())
+        drawBottomStatusStrip (g, bottomStripBounds);
 
-    if (currentTab == ActiveTab::Oscillators)
+    const auto leftPanel  = juce::Rectangle<float> (0.273f * w, 0.158f * h, 0.218f * w, 0.422f * h);
+    const auto rightPanel = juce::Rectangle<float> (0.503f * w, 0.158f * h, 0.218f * w, 0.422f * h);
+
+    switch (currentTab)
     {
-        drawOscillatorSection (g, leftPanel,  0, juce::Colour::fromRGB (0, 240, 255));
-        drawOscillatorSection (g, rightPanel, 1, juce::Colour::fromRGB (255, 60, 180));
-    }
-    else if (currentTab == ActiveTab::Filter)
-    {
-        drawFilterPanels (g, leftPanel, rightPanel);
-    }
-    else if (currentTab == ActiveTab::Envelopes)
-    {
-        drawEnvelopeSection (g, leftPanel,  0, juce::Colour::fromRGB (0, 240, 255));
-        drawEnvelopeSection (g, rightPanel, 1, juce::Colour::fromRGB (255, 60, 180));
-    }
-    else if (currentTab == ActiveTab::FreeEG)
-    {
-        drawFreeEgPanels (g, leftPanel, rightPanel);
-    }
-    else if (currentTab == ActiveTab::StepSequencer)
-    {
-        drawStepSeqPanels (g, leftPanel, rightPanel);
-    }
-    else if (currentTab == ActiveTab::ModMatrix)
-    {
-        drawModMatrixPanels (g, leftPanel, rightPanel);
+        case ActiveTab::Oscillators:
+            drawOscillatorSection (g, leftPanel,  0, juce::Colour::fromRGB (0, 240, 255));
+            drawOscillatorSection (g, rightPanel, 1, juce::Colour::fromRGB (255, 60, 180));
+            break;
+
+        case ActiveTab::Filter:
+            drawFilterPanels (g, leftPanel, rightPanel);
+            break;
+
+        case ActiveTab::Envelopes:
+            drawEnvelopeSection (g, leftPanel,  0, juce::Colour::fromRGB (0, 240, 255));
+            drawEnvelopeSection (g, rightPanel, 1, juce::Colour::fromRGB (255, 60, 180));
+            break;
+
+        case ActiveTab::FreeEG:
+            drawFreeEgPanels (g, leftPanel, rightPanel);
+            break;
+
+        case ActiveTab::StepSequencer:
+            drawStepSeqPanels (g, leftPanel, rightPanel);
+            break;
+
+        case ActiveTab::ModMatrix:
+            drawModMatrixPanels (g, leftPanel, rightPanel);
+            break;
+
+        case ActiveTab::NumTabs:
+        default:
+            break;
     }
 }
 
@@ -2584,496 +2845,325 @@ void NeomorphX1AudioProcessorEditor::resized()
     const float w = static_cast<float> (getWidth());
     const float h = static_cast<float> (getHeight());
 
-    // 0. Top-Bar Preset-Verwaltung
-    const float presetLeft   = 0.3815f * w;
-    const float presetTop    = 0.0105f * h;
-    const float presetRight  = 0.5965f * w;
-    const float presetBottom = 0.0480f * h;
-    presetBox.setBounds (
-        juce::roundToInt (presetLeft),
-        juce::roundToInt (presetTop),
-        juce::roundToInt (presetRight - presetLeft),
-        juce::roundToInt (presetBottom - presetTop)
-    );
+    // Unteres Status-Strip-Panel (exakte Benutzer-Koordinaten)
+    bottomStripBounds = juce::Rectangle<float> (0.2661f * w,
+                                                0.9016f * h,
+                                                (0.9113f - 0.2661f) * w,
+                                                (0.9481f - 0.9016f) * h);
 
-    const float topBtnW = 0.054f * w;
-    const float topBtnH = 0.032f * h;
+    // --- Top-Bar Preset-Controls ---
+    presetBox.setBounds        (juce::roundToInt (0.3125f * w), juce::roundToInt (0.0175f * h),
+                                juce::roundToInt (0.1680f * w), juce::roundToInt (0.0445f * h));
+    savePresetButton.setBounds (juce::roundToInt (0.4875f * w), juce::roundToInt (0.0155f * h),
+                                juce::roundToInt (0.0645f * w), juce::roundToInt (0.0480f * h));
+    loadPresetButton.setBounds (juce::roundToInt (0.5565f * w), juce::roundToInt (0.0155f * h),
+                                juce::roundToInt (0.0645f * w), juce::roundToInt (0.0480f * h));
+    panicButton.setBounds      (juce::roundToInt (0.6255f * w), juce::roundToInt (0.0155f * h),
+                                juce::roundToInt (0.0670f * w), juce::roundToInt (0.0480f * h));
+    prevPresetButton.setBounds (juce::roundToInt (0.6970f * w), juce::roundToInt (0.0155f * h),
+                                juce::roundToInt (0.0250f * w), juce::roundToInt (0.0480f * h));
+    nextPresetButton.setBounds (juce::roundToInt (0.7235f * w), juce::roundToInt (0.0155f * h),
+                                juce::roundToInt (0.0250f * w), juce::roundToInt (0.0480f * h));
 
-    savePresetButton.setBounds (
-        juce::roundToInt (0.1905f * w - topBtnW * 0.5f),
-        juce::roundToInt (0.0310f * h - topBtnH * 0.5f),
-        juce::roundToInt (topBtnW),
-        juce::roundToInt (topBtnH)
-    );
+    const float tabStartX = 0.2893f * w;
+    const float tabTotalW = 0.4152f * w;
+    const float singleW   = tabTotalW / static_cast<float> (ActiveTab::NumTabs);
 
-    loadPresetButton.setBounds (
-        juce::roundToInt (0.2542f * w - topBtnW * 0.5f),
-        juce::roundToInt (0.0310f * h - topBtnH * 0.5f),
-        juce::roundToInt (topBtnW),
-        juce::roundToInt (topBtnH)
-    );
-
-    panicButton.setBounds (
-        juce::roundToInt (0.3190f * w - topBtnW * 0.5f),
-        juce::roundToInt (0.0310f * h - topBtnH * 0.5f),
-        juce::roundToInt (topBtnW),
-        juce::roundToInt (topBtnH)
-    );
-
-    const float navBtnW = 0.024f * w;
-    const float navBtnH = 0.034f * h;
-
-    prevPresetButton.setBounds (
-        juce::roundToInt (0.6173f * w - navBtnW * 0.5f),
-        juce::roundToInt (0.0307f * h - navBtnH * 0.5f),
-        juce::roundToInt (navBtnW),
-        juce::roundToInt (navBtnH)
-    );
-
-    nextPresetButton.setBounds (
-        juce::roundToInt (0.6464f * w - navBtnW * 0.5f),
-        juce::roundToInt (0.0307f * h - navBtnH * 0.5f),
-        juce::roundToInt (navBtnW),
-        juce::roundToInt (navBtnH)
-    );
-
-    // 1. 6 Tab-Reiter
-    const float tabStartX = 0.305f;
-    const float tabY      = 0.208f;
-    const float tabH      = 0.036f;
-    const float tabWidths[6] = { 0.092f, 0.068f, 0.082f, 0.068f, 0.105f, 0.115f };
-
-    float currentX = tabStartX;
     for (size_t i = 0; i < tabButtons.size(); ++i)
     {
-        tabButtons[i].setBounds (
-            juce::roundToInt (currentX * w),
-            juce::roundToInt (tabY * h),
-            juce::roundToInt (tabWidths[i] * w),
-            juce::roundToInt (tabH * h)
-        );
-        currentX += tabWidths[i];
+        tabButtons[i].setBounds (juce::roundToInt (tabStartX + static_cast<float> (i) * singleW),
+                                 juce::roundToInt (0.0889f * h),
+                                 juce::roundToInt (singleW),
+                                 juce::roundToInt (0.0556f * h));
     }
 
-    // 2. 8 Scene-Buttons
-    constexpr float sceneBtnX[4] = { 0.4970f, 0.5369f, 0.5768f, 0.6170f };
-    const float sceneRow1Y       = 0.6720f * h;
-    const float sceneRow2Y       = 0.8190f * h;
-    const float sceneBtnW        = 0.032f * w;
-    const float sceneBtnH        = 0.056f * h;
+    settingsButton.setBounds (juce::roundToInt (0.946f * w),
+                              juce::roundToInt (0.012f * h),
+                              juce::roundToInt (0.036f * w),
+                              juce::roundToInt (0.060f * h));
 
-    for (int col = 0; col < 4; ++col)
+    const int btnWidth  = juce::roundToInt (0.0365f * w);
+    const int btnHeight = juce::roundToInt (0.0350f * h);
+
+    constexpr float sceneBtnX[8] = {
+        0.4795f, 0.5188f, 0.5580f, 0.5991f,
+        0.4795f, 0.5188f, 0.5580f, 0.5991f
+    };
+    constexpr float sceneBtnY[8] = {
+        0.6063f, 0.6063f, 0.6063f, 0.6063f,
+        0.8492f, 0.8492f, 0.8492f, 0.8492f
+    };
+
+    for (size_t i = 0; i < 8; ++i)
     {
-        const float cx = sceneBtnX[col] * w;
-        sceneHardwareButtons[static_cast<size_t> (col)].setBounds (
-            juce::roundToInt (cx - sceneBtnW * 0.5f),
-            juce::roundToInt (sceneRow1Y - sceneBtnH * 0.5f),
-            juce::roundToInt (sceneBtnW),
-            juce::roundToInt (sceneBtnH)
-        );
-
-        sceneHardwareButtons[static_cast<size_t> (col + 4)].setBounds (
-            juce::roundToInt (cx - sceneBtnW * 0.5f),
-            juce::roundToInt (sceneRow2Y - sceneBtnH * 0.5f),
-            juce::roundToInt (sceneBtnW),
-            juce::roundToInt (sceneBtnH)
-        );
+        sceneHardwareButtons[i].setBounds (juce::roundToInt (sceneBtnX[i] * w),
+                                           juce::roundToInt (sceneBtnY[i] * h),
+                                           btnWidth,
+                                           btnHeight);
     }
 
-    // 3. 4 LCD-Buttons
-    constexpr float lcdBtnX[4] = { 0.0988f, 0.1536f, 0.2083f, 0.2637f };
-    const float lcdBtnY        = 0.4880f * h;
-    const float lcdBtnW        = 0.044f * w;
-    const float lcdBtnH        = 0.046f * h;
+    const int lcdBtnW = juce::roundToInt (0.0420f * w);
+    const int lcdBtnH = juce::roundToInt (0.0300f * h);
+    const int lcdBtnX = juce::roundToInt (0.6410f * w);
+    constexpr float lcdBtnY[4] = { 0.6460f, 0.6920f, 0.7380f, 0.7840f };
 
-    for (int i = 0; i < 4; ++i)
+    for (size_t i = 0; i < 4; ++i)
     {
-        const float cx = lcdBtnX[i] * w;
-        lcdPageButtons[static_cast<size_t> (i)].setBounds (
-            juce::roundToInt (cx - lcdBtnW * 0.5f),
-            juce::roundToInt (lcdBtnY - lcdBtnH * 0.5f),
-            juce::roundToInt (lcdBtnW),
-            juce::roundToInt (lcdBtnH)
-        );
+        lcdPageButtons[i].setBounds (lcdBtnX,
+                                     juce::roundToInt (lcdBtnY[i] * h),
+                                     lcdBtnW,
+                                     lcdBtnH);
     }
 
-    // 4. Settings-Icon
-    const float iconSize = 0.032f * w;
-    settingsButton.setBounds (
-        juce::roundToInt (0.9515f * w - iconSize * 0.5f),
-        juce::roundToInt (0.0343f * h - iconSize * 0.5f),
-        juce::roundToInt (iconSize),
-        juce::roundToInt (iconSize)
-    );
+    constexpr float colX[2] = { 0.766f, 0.863f };
+    constexpr float rowY[5] = { 0.165f, 0.335f, 0.505f, 0.675f, 0.822f };
 
-    // 5. 10 rechte Drehregler (Vol, Pan, Assign 1..8)
-    constexpr std::array<std::pair<float, float>, 10> knobCoords = {{
-        { 0.8490f, 0.2054f }, { 0.9175f, 0.2087f },
-        { 0.8496f, 0.3413f }, { 0.9181f, 0.3424f },
-        { 0.8496f, 0.4750f }, { 0.9187f, 0.4772f },
-        { 0.8502f, 0.6217f }, { 0.9181f, 0.6261f },
-        { 0.8490f, 0.7750f }, { 0.9175f, 0.7728f }
-    }};
+    const int knobSize = juce::roundToInt (0.056f * w);
 
-    const float knobDiameter = 0.056f * w;
     for (size_t i = 0; i < matrixKnobs.size(); ++i)
     {
-        const float cx = knobCoords[i].first  * w;
-        const float cy = knobCoords[i].second * h;
-        matrixKnobs[i].setBounds (
-            juce::roundToInt (cx - knobDiameter * 0.5f),
-            juce::roundToInt (cy - knobDiameter * 0.5f),
-            juce::roundToInt (knobDiameter),
-            juce::roundToInt (knobDiameter)
-        );
+        const size_t row = i / 2;
+        const size_t col = i % 2;
+
+        const int cx = juce::roundToInt (colX[col] * w);
+        const int cy = juce::roundToInt (rowY[row] * h);
+
+        matrixKnobs[i].setBounds (cx - knobSize / 2, cy - knobSize / 2, knobSize, knobSize);
     }
 
-    // 6. 3 Scene-Fader
-    constexpr float faderX[3] = { 0.2823f, 0.3542f, 0.4265f };
-    const float faderTopY     = 0.6148f * h - 10.0f;
-    const float faderBottomY  = 0.8185f * h + 10.0f;
-    const float faderHeight   = faderBottomY - faderTopY;
-    const float faderWidth    = 0.036f * w;
+    constexpr float faderX[3] = { 0.278f, 0.342f, 0.405f };
+    const int faderTop    = juce::roundToInt (0.605f * h);
+    const int faderWidth  = juce::roundToInt (0.036f * w);
+    const int faderHeight = juce::roundToInt (0.275f * h);
 
     for (size_t i = 0; i < sceneFaders.size(); ++i)
     {
-        const float cx = faderX[i] * w;
-        sceneFaders[i].setBounds (
-            juce::roundToInt (cx - faderWidth * 0.5f),
-            juce::roundToInt (faderTopY),
-            juce::roundToInt (faderWidth),
-            juce::roundToInt (faderHeight)
-        );
+        const int cx = juce::roundToInt (faderX[i] * w);
+        sceneFaders[i].setBounds (cx - faderWidth / 2, faderTop, faderWidth, faderHeight);
     }
 
-    // 7. Pitch- & Mod-Wheel
-    const float wheelTopY    = 0.6290f * h;
-    const float wheelBottomY = 0.8444f * h;
-    const float wheelHeight  = wheelBottomY - wheelTopY;
-    const float wheelWidth   = 0.042f * w;
+    const int wheelTop    = juce::roundToInt (0.588f * h);
+    const int wheelWidth  = juce::roundToInt (0.044f * w);
+    const int wheelHeight = juce::roundToInt (0.295f * h);
 
-    pitchWheel.setBounds (
-        juce::roundToInt (0.1024f * w - wheelWidth * 0.5f),
-        juce::roundToInt (wheelTopY),
-        juce::roundToInt (wheelWidth),
-        juce::roundToInt (wheelHeight)
-    );
+    pitchWheel.setBounds (juce::roundToInt (0.092f * w) - wheelWidth / 2, wheelTop, wheelWidth, wheelHeight);
+    modWheel.setBounds   (juce::roundToInt (0.172f * w) - wheelWidth / 2, wheelTop, wheelWidth, wheelHeight);
 
-    modWheel.setBounds (
-        juce::roundToInt (0.1728f * w - wheelWidth * 0.5f),
-        juce::roundToInt (wheelTopY),
-        juce::roundToInt (wheelWidth),
-        juce::roundToInt (wheelHeight)
-    );
+    const float panelX[2]   = { 0.273f * w, 0.503f * w };
+    const float panelTop    = 0.158f * h;
+    const float panelW      = 0.218f * w;
+    const float panelH      = 0.422f * h;
 
-    // 8. Tab 1: Oscillators Layout
-    const float oscPanelX[2] = { 0.3181f, 0.5662f };
-    const float panelY       = 0.2673f * h;
-    const float panelW       = 0.2380f * w;
-    const float panelH       = 0.2700f * h;
-    const float oscKnobSize  = 0.034f * w;
+    // --- Tab 1: Oscillators Layout ---
+    const int oscKnobSize = juce::roundToInt (0.043f * w);
+    const float oscRow1Y  = panelTop + panelH * 0.45f;
+    const float oscRow2Y  = panelTop + panelH * 0.77f;
 
     for (size_t i = 0; i < oscControls.size(); ++i)
     {
         auto& osc = oscControls[i];
-        const float px = oscPanelX[i] * w;
+        const float px = panelX[i];
 
-        osc.waveBox.setBounds (
-            juce::roundToInt (px + 0.008f * w),
-            juce::roundToInt (panelY + 0.040f * h),
-            juce::roundToInt (0.112f * w),
-            juce::roundToInt (0.032f * h)
-        );
+        osc.waveBox.setBounds (juce::roundToInt (px + 10.0f),
+                               juce::roundToInt (panelTop + panelH * 0.145f),
+                               juce::roundToInt (panelW * 0.51f),
+                               juce::roundToInt (panelH * 0.125f));
 
-        const float row1Y = panelY + 0.120f * h;
-        const float row2Y = panelY + 0.208f * h;
+        juce::Slider* row1[4] = { &osc.octaveKnob, &osc.semiKnob, &osc.detuneKnob, &osc.positionKnob };
+        juce::Slider* row2[4] = { &osc.morphKnob,  &osc.phaseKnob, &osc.panKnob,   &osc.levelKnob };
 
-        auto placeKnob = [px, panelW, oscKnobSize] (juce::Slider& k, int col, float cy)
+        for (int col = 0; col < 4; ++col)
         {
-            const float cx = px + panelW * (0.14f + static_cast<float> (col) * 0.24f);
-            k.setBounds (
-                juce::roundToInt (cx - oscKnobSize * 0.5f),
-                juce::roundToInt (cy - oscKnobSize * 0.5f),
-                juce::roundToInt (oscKnobSize),
-                juce::roundToInt (oscKnobSize)
-            );
-        };
-
-        placeKnob (osc.octaveKnob,   0, row1Y);
-        placeKnob (osc.semiKnob,     1, row1Y);
-        placeKnob (osc.detuneKnob,   2, row1Y);
-        placeKnob (osc.positionKnob, 3, row1Y);
-
-        placeKnob (osc.morphKnob,    0, row2Y);
-        placeKnob (osc.phaseKnob,    1, row2Y);
-        placeKnob (osc.panKnob,      2, row2Y);
-        placeKnob (osc.levelKnob,    3, row2Y);
+            const float cx = px + panelW * (0.145f + 0.236f * static_cast<float> (col));
+            row1[col]->setBounds (juce::roundToInt (cx) - oscKnobSize / 2,
+                                  juce::roundToInt (oscRow1Y) - oscKnobSize / 2,
+                                  oscKnobSize, oscKnobSize);
+            row2[col]->setBounds (juce::roundToInt (cx) - oscKnobSize / 2,
+                                  juce::roundToInt (oscRow2Y) - oscKnobSize / 2,
+                                  oscKnobSize, oscKnobSize);
+        }
     }
 
-    // 9. Tab 2: Filter Layout
-    {
-        const float leftPx  = oscPanelX[0] * w;
-        const float rightPx = oscPanelX[1] * w;
+    // --- Tab 2: Filter Layout ---
+    const float leftX  = panelX[0];
+    const float rightX = panelX[1];
 
-        filterControls.typeBox.setBounds (
-            juce::roundToInt (leftPx + 0.008f * w),
-            juce::roundToInt (panelY + 0.038f * h),
-            juce::roundToInt (0.106f * w),
-            juce::roundToInt (0.030f * h)
-        );
+    filterControls.typeBox.setBounds (juce::roundToInt (leftX + 10.0f),
+                                      juce::roundToInt (panelTop + panelH * 0.14f),
+                                      juce::roundToInt (panelW * 0.46f),
+                                      juce::roundToInt (panelH * 0.115f));
 
-        filterControls.routingBox.setBounds (
-            juce::roundToInt (leftPx + 0.008f * w),
-            juce::roundToInt (panelY + 0.074f * h),
-            juce::roundToInt (0.106f * w),
-            juce::roundToInt (0.030f * h)
-        );
+    filterControls.routingBox.setBounds (juce::roundToInt (leftX + 10.0f),
+                                         juce::roundToInt (panelTop + panelH * 0.28f),
+                                         juce::roundToInt (panelW * 0.46f),
+                                         juce::roundToInt (panelH * 0.115f));
 
-        const float mainFltKnobSize = 0.048f * w;
-        const float mainFltKnobY    = panelY + 0.196f * h;
+    const int bigFltKnob = juce::roundToInt (0.056f * w);
+    const float fltKnobY = panelTop + panelH * 0.67f;
 
-        filterControls.cutoffKnob.setBounds (
-            juce::roundToInt (leftPx + panelW * 0.30f - mainFltKnobSize * 0.5f),
-            juce::roundToInt (mainFltKnobY - mainFltKnobSize * 0.5f),
-            juce::roundToInt (mainFltKnobSize),
-            juce::roundToInt (mainFltKnobSize)
-        );
+    filterControls.cutoffKnob.setBounds (juce::roundToInt (leftX + panelW * 0.30f) - bigFltKnob / 2,
+                                         juce::roundToInt (fltKnobY) - bigFltKnob / 2,
+                                         bigFltKnob, bigFltKnob);
 
-        filterControls.resonanceKnob.setBounds (
-            juce::roundToInt (leftPx + panelW * 0.70f - mainFltKnobSize * 0.5f),
-            juce::roundToInt (mainFltKnobY - mainFltKnobSize * 0.5f),
-            juce::roundToInt (mainFltKnobSize),
-            juce::roundToInt (mainFltKnobSize)
-        );
+    filterControls.resonanceKnob.setBounds (juce::roundToInt (leftX + panelW * 0.70f) - bigFltKnob / 2,
+                                            juce::roundToInt (fltKnobY) - bigFltKnob / 2,
+                                            bigFltKnob, bigFltKnob);
 
-        const float modFltKnobSize = 0.038f * w;
-        const float modRow1Y       = panelY + 0.095f * h;
-        const float modRow2Y       = panelY + 0.200f * h;
+    const int modFltKnob = juce::roundToInt (0.048f * w);
+    const float rRow1Y   = panelTop + panelH * 0.34f;
+    const float rRow2Y   = panelTop + panelH * 0.72f;
 
-        auto placeRightKnob = [rightPx, panelW, modFltKnobSize] (juce::Slider& k, int col, float cy)
-        {
-            const float cx = rightPx + panelW * (col == 0 ? 0.30f : 0.70f);
-            k.setBounds (
-                juce::roundToInt (cx - modFltKnobSize * 0.5f),
-                juce::roundToInt (cy - modFltKnobSize * 0.5f),
-                juce::roundToInt (modFltKnobSize),
-                juce::roundToInt (modFltKnobSize)
-            );
-        };
+    filterControls.driveKnob.setBounds    (juce::roundToInt (rightX + panelW * 0.30f) - modFltKnob / 2,
+                                           juce::roundToInt (rRow1Y) - modFltKnob / 2, modFltKnob, modFltKnob);
+    filterControls.envAmtKnob.setBounds   (juce::roundToInt (rightX + panelW * 0.70f) - modFltKnob / 2,
+                                           juce::roundToInt (rRow1Y) - modFltKnob / 2, modFltKnob, modFltKnob);
+    filterControls.keytrackKnob.setBounds (juce::roundToInt (rightX + panelW * 0.30f) - modFltKnob / 2,
+                                           juce::roundToInt (rRow2Y) - modFltKnob / 2, modFltKnob, modFltKnob);
+    filterControls.velSensKnob.setBounds  (juce::roundToInt (rightX + panelW * 0.70f) - modFltKnob / 2,
+                                           juce::roundToInt (rRow2Y) - modFltKnob / 2, modFltKnob, modFltKnob);
 
-        placeRightKnob (filterControls.driveKnob,    0, modRow1Y);
-        placeRightKnob (filterControls.envAmtKnob,   1, modRow1Y);
-        placeRightKnob (filterControls.keytrackKnob, 0, modRow2Y);
-        placeRightKnob (filterControls.velSensKnob,  1, modRow2Y);
-    }
-
-    // 10. Tab 3: Envelopes Layout
-    const float envKnobSize = 0.036f * w;
-    const float envKnobY    = panelY + 0.204f * h;
+    // --- Tab 3: Envelopes Layout ---
+    const int envKnobSize = juce::roundToInt (0.044f * w);
+    const float envKnobY  = panelTop + panelH * 0.76f;
 
     for (size_t i = 0; i < envControls.size(); ++i)
     {
         auto& env = envControls[i];
-        const float px = oscPanelX[i] * w;
+        const float px = panelX[i];
 
-        auto placeEnvKnob = [px, panelW, envKnobSize, envKnobY] (juce::Slider& k, int col)
+        juce::Slider* knobs[4] = { &env.attackKnob, &env.decayKnob, &env.sustainKnob, &env.releaseKnob };
+        for (int col = 0; col < 4; ++col)
         {
-            const float cx = px + panelW * (0.14f + static_cast<float> (col) * 0.24f);
-            k.setBounds (
-                juce::roundToInt (cx - envKnobSize * 0.5f),
-                juce::roundToInt (envKnobY - envKnobSize * 0.5f),
-                juce::roundToInt (envKnobSize),
-                juce::roundToInt (envKnobSize)
-            );
-        };
-
-        placeEnvKnob (env.attackKnob,  0);
-        placeEnvKnob (env.decayKnob,   1);
-        placeEnvKnob (env.sustainKnob, 2);
-        placeEnvKnob (env.releaseKnob, 3);
-    }
-
-    // 11. Tab 4: Free EG Layout
-    {
-        const float leftPx  = oscPanelX[0] * w;
-        const float rightPx = oscPanelX[1] * w;
-
-        freeEgControls.canvas.setBounds (
-            juce::roundToInt (leftPx + 10.0f),
-            juce::roundToInt (panelY + 0.044f * h),
-            juce::roundToInt (panelW - 20.0f),
-            juce::roundToInt (0.168f * h)
-        );
-
-        freeEgControls.targetBox.setBounds (
-            juce::roundToInt (leftPx + panelW * 0.34f),
-            juce::roundToInt (panelY + 0.222f * h),
-            juce::roundToInt (panelW * 0.66f - 10.0f),
-            juce::roundToInt (0.032f * h)
-        );
-
-        const float boxW = (panelW - 26.0f) * 0.5f;
-        freeEgControls.modeBox.setBounds (
-            juce::roundToInt (rightPx + 10.0f),
-            juce::roundToInt (panelY + 0.056f * h),
-            juce::roundToInt (boxW),
-            juce::roundToInt (0.034f * h)
-        );
-
-        freeEgControls.syncBox.setBounds (
-            juce::roundToInt (rightPx + 16.0f + boxW),
-            juce::roundToInt (panelY + 0.056f * h),
-            juce::roundToInt (boxW),
-            juce::roundToInt (0.034f * h)
-        );
-
-        const float fegKnobSize = 0.040f * w;
-        const float fegKnobY    = panelY + 0.186f * h;
-
-        auto placeFegKnob = [rightPx, panelW, fegKnobSize, fegKnobY] (juce::Slider& k, int col)
-        {
-            const float cx = rightPx + panelW * (0.20f + static_cast<float> (col) * 0.30f);
-            k.setBounds (
-                juce::roundToInt (cx - fegKnobSize * 0.5f),
-                juce::roundToInt (fegKnobY - fegKnobSize * 0.5f),
-                juce::roundToInt (fegKnobSize),
-                juce::roundToInt (fegKnobSize)
-            );
-        };
-
-        placeFegKnob (freeEgControls.timeKnob,   0);
-        placeFegKnob (freeEgControls.amountKnob, 1);
-        placeFegKnob (freeEgControls.smoothKnob, 2);
-    }
-
-    // 12. Tab 5: Step Sequencer Layout
-    {
-        const float leftPx  = oscPanelX[0] * w;
-        const float rightPx = oscPanelX[1] * w;
-
-        stepSeqControls.canvas.setBounds (
-            juce::roundToInt (leftPx + 10.0f),
-            juce::roundToInt (panelY + 0.044f * h),
-            juce::roundToInt (panelW - 20.0f),
-            juce::roundToInt (0.168f * h)
-        );
-
-        const float boxW = (panelW - 26.0f) * 0.5f;
-        stepSeqControls.modeBox.setBounds (
-            juce::roundToInt (leftPx + 10.0f),
-            juce::roundToInt (panelY + 0.222f * h),
-            juce::roundToInt (boxW),
-            juce::roundToInt (0.032f * h)
-        );
-
-        stepSeqControls.lengthBox.setBounds (
-            juce::roundToInt (leftPx + 16.0f + boxW),
-            juce::roundToInt (panelY + 0.222f * h),
-            juce::roundToInt (boxW),
-            juce::roundToInt (0.032f * h)
-        );
-
-        stepSeqControls.rateBox.setBounds (
-            juce::roundToInt (rightPx + panelW * 0.30f),
-            juce::roundToInt (panelY + 0.056f * h),
-            juce::roundToInt (panelW * 0.70f - 10.0f),
-            juce::roundToInt (0.034f * h)
-        );
-
-        const float seqKnobSize = 0.040f * w;
-        const float seqKnobY    = panelY + 0.186f * h;
-
-        auto placeSeqKnob = [rightPx, panelW, seqKnobSize, seqKnobY] (juce::Slider& k, int col)
-        {
-            const float cx = rightPx + panelW * (0.20f + static_cast<float> (col) * 0.30f);
-            k.setBounds (
-                juce::roundToInt (cx - seqKnobSize * 0.5f),
-                juce::roundToInt (seqKnobY - seqKnobSize * 0.5f),
-                juce::roundToInt (seqKnobSize),
-                juce::roundToInt (seqKnobSize)
-            );
-        };
-
-        placeSeqKnob (stepSeqControls.gateKnob,   0);
-        placeSeqKnob (stepSeqControls.swingKnob,  1);
-        placeSeqKnob (stepSeqControls.amountKnob, 2);
-    }
-
-    // 13. Tab 6: Mod Matrix & LFO 1 Layout
-    {
-        const float leftPx  = oscPanelX[0] * w;
-        const float rightPx = oscPanelX[1] * w;
-
-        const float rowStartY = panelY + 0.045f * h;
-        const float rowStepY  = 0.054f * h;
-        const float boxH      = 0.031f * h;
-        const float boxW      = (panelW - 20.0f - 0.032f * w) * 0.5f;
-        const float amtKnobSz = 0.025f * w;
-
-        for (size_t m = 0; m < 4; ++m)
-        {
-            auto& slot = modMatrixControls.slots[m];
-            const float ry = rowStartY + static_cast<float> (m) * rowStepY;
-
-            slot.srcBox.setBounds (
-                juce::roundToInt (leftPx + 8.0f),
-                juce::roundToInt (ry),
-                juce::roundToInt (boxW),
-                juce::roundToInt (boxH)
-            );
-
-            slot.dstBox.setBounds (
-                juce::roundToInt (leftPx + 12.0f + boxW),
-                juce::roundToInt (ry),
-                juce::roundToInt (boxW),
-                juce::roundToInt (boxH)
-            );
-
-            const float knobCx = leftPx + panelW - 8.0f - amtKnobSz * 0.5f;
-            const float knobCy = ry + boxH * 0.5f;
-            slot.amtKnob.setBounds (
-                juce::roundToInt (knobCx - amtKnobSz * 0.5f),
-                juce::roundToInt (knobCy - amtKnobSz * 0.5f),
-                juce::roundToInt (amtKnobSz),
-                juce::roundToInt (amtKnobSz)
-            );
+            const float cx = px + panelW * (0.145f + 0.236f * static_cast<float> (col));
+            knobs[col]->setBounds (juce::roundToInt (cx) - envKnobSize / 2,
+                                   juce::roundToInt (envKnobY) - envKnobSize / 2,
+                                   envKnobSize, envKnobSize);
         }
-
-        modMatrixControls.lfoSyncBox.setBounds (
-            juce::roundToInt (rightPx + panelW * 0.36f),
-            juce::roundToInt (panelY + 0.050f * h),
-            juce::roundToInt (panelW * 0.64f - 10.0f),
-            juce::roundToInt (0.032f * h)
-        );
-
-        const float lfoKnobSize = 0.036f * w;
-        const float lfoKnobY    = panelY + 0.156f * h;
-
-        auto placeLfoKnob = [rightPx, panelW, lfoKnobSize, lfoKnobY] (juce::Slider& k, int col)
-        {
-            const float cx = rightPx + panelW * (0.20f + static_cast<float> (col) * 0.30f);
-            k.setBounds (
-                juce::roundToInt (cx - lfoKnobSize * 0.5f),
-                juce::roundToInt (lfoKnobY - lfoKnobSize * 0.5f),
-                juce::roundToInt (lfoKnobSize),
-                juce::roundToInt (lfoKnobSize)
-            );
-        };
-
-        placeLfoKnob (modMatrixControls.lfoRateKnob,  0);
-        placeLfoKnob (modMatrixControls.lfoFadeKnob,  1);
-        placeLfoKnob (modMatrixControls.lfoDepthKnob, 2);
     }
+
+    // --- Tab 4: Free EG Layout ---
+    freeEgControls.canvas.setBounds (juce::roundToInt (leftX + 10.0f),
+                                     juce::roundToInt (panelTop + panelH * 0.14f),
+                                     juce::roundToInt (panelW - 20.0f),
+                                     juce::roundToInt (panelH * 0.64f));
+
+    freeEgControls.targetBox.setBounds (juce::roundToInt (leftX + panelW * 0.34f),
+                                        juce::roundToInt (panelTop + panelH * 0.82f),
+                                        juce::roundToInt (panelW * 0.61f),
+                                        juce::roundToInt (panelH * 0.125f));
+
+    freeEgControls.modeBox.setBounds (juce::roundToInt (rightX + 10.0f),
+                                      juce::roundToInt (panelTop + panelH * 0.15f),
+                                      juce::roundToInt (panelW - 20.0f),
+                                      juce::roundToInt (panelH * 0.135f));
+
+    freeEgControls.syncBox.setBounds (juce::roundToInt (rightX + 10.0f),
+                                      juce::roundToInt (panelTop + panelH * 0.32f),
+                                      juce::roundToInt (panelW - 20.0f),
+                                      juce::roundToInt (panelH * 0.135f));
+
+    const int fegKnobSize = juce::roundToInt (0.046f * w);
+    const float fegKnobY  = panelTop + panelH * 0.69f;
+
+    freeEgControls.timeKnob.setBounds   (juce::roundToInt (rightX + panelW * 0.20f) - fegKnobSize / 2,
+                                         juce::roundToInt (fegKnobY) - fegKnobSize / 2, fegKnobSize, fegKnobSize);
+    freeEgControls.amountKnob.setBounds (juce::roundToInt (rightX + panelW * 0.50f) - fegKnobSize / 2,
+                                         juce::roundToInt (fegKnobY) - fegKnobSize / 2, fegKnobSize, fegKnobSize);
+    freeEgControls.smoothKnob.setBounds (juce::roundToInt (rightX + panelW * 0.80f) - fegKnobSize / 2,
+                                         juce::roundToInt (fegKnobY) - fegKnobSize / 2, fegKnobSize, fegKnobSize);
+
+    // --- Tab 5: Step Sequencer Layout ---
+    stepSeqControls.canvas.setBounds (juce::roundToInt (leftX + 10.0f),
+                                      juce::roundToInt (panelTop + panelH * 0.14f),
+                                      juce::roundToInt (panelW - 20.0f),
+                                      juce::roundToInt (panelH * 0.64f));
+
+    stepSeqControls.modeBox.setBounds (juce::roundToInt (leftX + 10.0f),
+                                       juce::roundToInt (panelTop + panelH * 0.82f),
+                                       juce::roundToInt (panelW * 0.53f),
+                                       juce::roundToInt (panelH * 0.125f));
+
+    stepSeqControls.lengthBox.setBounds (juce::roundToInt (leftX + panelW * 0.57f),
+                                         juce::roundToInt (panelTop + panelH * 0.82f),
+                                         juce::roundToInt (panelW * 0.38f),
+                                         juce::roundToInt (panelH * 0.125f));
+
+    stepSeqControls.rateBox.setBounds (juce::roundToInt (rightX + panelW * 0.30f),
+                                       juce::roundToInt (panelTop + panelH * 0.16f),
+                                       juce::roundToInt (panelW * 0.65f),
+                                       juce::roundToInt (panelH * 0.135f));
+
+    const int seqKnobSize = juce::roundToInt (0.046f * w);
+    const float seqKnobY  = panelTop + panelH * 0.58f;
+
+    stepSeqControls.gateKnob.setBounds   (juce::roundToInt (rightX + panelW * 0.20f) - seqKnobSize / 2,
+                                          juce::roundToInt (seqKnobY) - seqKnobSize / 2, seqKnobSize, seqKnobSize);
+    stepSeqControls.swingKnob.setBounds  (juce::roundToInt (rightX + panelW * 0.50f) - seqKnobSize / 2,
+                                          juce::roundToInt (seqKnobY) - seqKnobSize / 2, seqKnobSize, seqKnobSize);
+    stepSeqControls.amountKnob.setBounds (juce::roundToInt (rightX + panelW * 0.80f) - seqKnobSize / 2,
+                                          juce::roundToInt (seqKnobY) - seqKnobSize / 2, seqKnobSize, seqKnobSize);
+
+    // --- Tab 6: Mod Matrix & LFO 1 Layout ---
+    const int modAmtKnobSize = juce::roundToInt (0.031f * w);
+    const float slotStartY   = panelTop + panelH * 0.145f;
+    const float slotPitchY   = panelH * 0.205f;
+    const int boxH           = juce::roundToInt (panelH * 0.125f);
+
+    for (size_t m = 0; m < 4; ++m)
+    {
+        auto& slot = modMatrixControls.slots[m];
+        const float rowCenterY = slotStartY + static_cast<float> (m) * slotPitchY + static_cast<float> (boxH) * 0.5f;
+
+        slot.srcBox.setBounds (juce::roundToInt (leftX + 8.0f),
+                               juce::roundToInt (rowCenterY - static_cast<float> (boxH) * 0.5f),
+                               juce::roundToInt (panelW * 0.37f),
+                               boxH);
+
+        slot.dstBox.setBounds (juce::roundToInt (leftX + panelW * 0.41f),
+                               juce::roundToInt (rowCenterY - static_cast<float> (boxH) * 0.5f),
+                               juce::roundToInt (panelW * 0.39f),
+                               boxH);
+
+        slot.amtKnob.setBounds (juce::roundToInt (leftX + panelW * 0.89f) - modAmtKnobSize / 2,
+                                juce::roundToInt (rowCenterY) - modAmtKnobSize / 2,
+                                modAmtKnobSize, modAmtKnobSize);
+    }
+
+    modMatrixControls.lfoSyncBox.setBounds (juce::roundToInt (rightX + panelW * 0.38f),
+                                            juce::roundToInt (panelTop + panelH * 0.15f),
+                                            juce::roundToInt (panelW * 0.57f),
+                                            juce::roundToInt (panelH * 0.130f));
+
+    const int lfoKnobSize = juce::roundToInt (0.044f * w);
+    const float lfoKnobY  = panelTop + panelH * 0.52f;
+
+    modMatrixControls.lfoRateKnob.setBounds  (juce::roundToInt (rightX + panelW * 0.20f) - lfoKnobSize / 2,
+                                              juce::roundToInt (lfoKnobY) - lfoKnobSize / 2, lfoKnobSize, lfoKnobSize);
+    modMatrixControls.lfoFadeKnob.setBounds  (juce::roundToInt (rightX + panelW * 0.50f) - lfoKnobSize / 2,
+                                              juce::roundToInt (lfoKnobY) - lfoKnobSize / 2, lfoKnobSize, lfoKnobSize);
+    modMatrixControls.lfoDepthKnob.setBounds (juce::roundToInt (rightX + panelW * 0.80f) - lfoKnobSize / 2,
+                                              juce::roundToInt (lfoKnobY) - lfoKnobSize / 2, lfoKnobSize, lfoKnobSize);
 }
 
 void NeomorphX1AudioProcessorEditor::mouseDown (const juce::MouseEvent& event)
 {
+    if (event.mods.isLeftButtonDown() && scopeClickArea.contains (event.position))
+    {
+        const int nextMode = (static_cast<int> (bottomStripMode) + 1) % static_cast<int> (BottomStripMode::NumModes);
+        bottomStripMode = static_cast<BottomStripMode> (nextMode);
+        repaint (bottomStripBounds.toNearestInt().expanded (2));
+        return;
+    }
+
     if (event.mods.isRightButtonDown())
     {
-        const float relX = static_cast<float> (event.x) / static_cast<float> (getWidth());
-        const float relY = static_cast<float> (event.y) / static_cast<float> (getHeight());
+        const float relX = event.position.x / static_cast<float> (getWidth());
+        const float relY = event.position.y / static_cast<float> (getHeight());
 
-        triggerLcdNotification ("RELATIVE COORDS",
-                                juce::String::formatted ("{ %.4ff, %.4ff }", relX, relY));
+        juce::AlertWindow::showMessageBoxAsync (
+            juce::MessageBoxIconType::InfoIcon,
+            "NeomorphX1 Koordinaten-Helfer",
+            juce::String::formatted ("Pixel: %d, %d\nRelativ: %.4ff, %.4ff",
+                                     event.x, event.y, relX, relY));
     }
 }

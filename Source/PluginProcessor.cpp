@@ -326,7 +326,7 @@ namespace
 
             for (int sampleIdx = 0; sampleIdx < numSamples; ++sampleIdx)
             {
-				std::array<float, 2> ampEnvArr { 0.0f, 0.0f };
+                std::array<float, 2> ampEnvArr { 0.0f, 0.0f };
                 std::array<float, 2> modEnvArr { 0.0f, 0.0f };
                 std::array<float, 2> fegRawVal { 0.0f, 0.0f };
                 std::array<int, 2>   fegTarget { 0, 0 };
@@ -560,6 +560,9 @@ namespace
                 }
 
                 const float effectiveMorph = juce::jlimit (0.0f, 1.0f, baseMorph + morphModOffset);
+                if (sampleIdx == 0)
+                    cache.liveEffectiveMorph.store (effectiveMorph);
+
                 const float weight1 = s1Gain * (1.0f - effectiveMorph);
                 const float weight2 = s2Gain * effectiveMorph;
 
@@ -1225,21 +1228,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
             const auto mp = scenePrefix + "mod" + juce::String (m + 1) + "_";
             const auto ml = sceneLabel + "Mod " + juce::String (m + 1) + " ";
 
-			const int defSrc = 0;
-            const int defDst = 0;
-            const float defAmt = 0.0f;
-
             params.push_back (std::make_unique<juce::AudioParameterChoice> (
                 juce::ParameterID { mp + "src", 1 }, ml + "Source",
-                modSources, defSrc));
+                modSources, 0));
 
             params.push_back (std::make_unique<juce::AudioParameterChoice> (
                 juce::ParameterID { mp + "dst", 1 }, ml + "Destination",
-                modDestinations, defDst));
+                modDestinations, 0));
 
             params.push_back (std::make_unique<juce::AudioParameterFloat> (
                 juce::ParameterID { mp + "amt", 1 }, ml + "Amount",
-                juce::NormalisableRange<float> (-1.0f, 1.0f, 0.01f), defAmt));
+                juce::NormalisableRange<float> (-1.0f, 1.0f, 0.01f), 0.0f));
         }
     }
 
@@ -1391,6 +1390,9 @@ void NeomorphX1AudioProcessor::panicReset()
     paramCache.activeSeqStep[1].store (-1);
     paramCache.liveLfoOut[0].store (0.0f);
     paramCache.liveLfoOut[1].store (0.0f);
+    activeVoiceCount.store (0);
+    lastMidiNote.store (-1);
+    lastMidiVelocity.store (0);
 }
 
 void NeomorphX1AudioProcessor::copySceneParameters (int sourceScene, int targetScene)
@@ -1499,6 +1501,7 @@ void NeomorphX1AudioProcessor::changeProgramName (int index, const juce::String&
 void NeomorphX1AudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     juce::ignoreUnused (samplesPerBlock);
+    currentSampleRateHz.store (sampleRate);
     synth.setCurrentPlaybackSampleRate (sampleRate);
 }
 
@@ -1524,6 +1527,7 @@ void NeomorphX1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     {
         synth.allNotesOff (0, false);
         midiMessages.clear();
+        activeVoiceCount.store (0);
         return;
     }
 
@@ -1540,17 +1544,28 @@ void NeomorphX1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     {
         const auto msg = metadata.getMessage();
 
-        if (msg.isPitchWheel())
+        if (msg.isNoteOn())
+        {
+            lastMidiNote.store (msg.getNoteNumber());
+            lastMidiVelocity.store (msg.getVelocity());
+            midiActivityFlag.store (true);
+        }
+        else if (msg.isPitchWheel())
         {
             const float normPitch = (static_cast<float> (msg.getPitchWheelValue()) - 8192.0f) / 8192.0f;
             if (auto* param = apvts.getParameter ("pitch_wheel"))
                 param->setValueNotifyingHost (param->convertTo0to1 (juce::jlimit (-1.0f, 1.0f, normPitch)));
+            midiActivityFlag.store (true);
         }
-        else if (msg.isController() && msg.getControllerNumber() == 1)
+        else if (msg.isController())
         {
-            const float normMod = static_cast<float> (msg.getControllerValue()) / 127.0f;
-            if (auto* param = apvts.getParameter ("mod_wheel"))
-                param->setValueNotifyingHost (normMod);
+            if (msg.getControllerNumber() == 1)
+            {
+                const float normMod = static_cast<float> (msg.getControllerValue()) / 127.0f;
+                if (auto* param = apvts.getParameter ("mod_wheel"))
+                    param->setValueNotifyingHost (normMod);
+            }
+            midiActivityFlag.store (true);
         }
     }
 
@@ -1572,6 +1587,48 @@ void NeomorphX1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     else if (buffer.getNumChannels() == 1)
     {
         buffer.applyGain (0, 0, numSamples, masterVol);
+    }
+
+    // Aktive Voices zählen
+    int activeVoices = 0;
+    for (int i = 0; i < synth.getNumVoices(); ++i)
+    {
+        if (auto* v = synth.getVoice (i))
+            if (v->isVoiceActive())
+                ++activeVoices;
+    }
+    activeVoiceCount.store (activeVoices);
+
+    if (activeVoices == 0)
+        paramCache.liveEffectiveMorph.store (paramCache.sceneMorph->load());
+
+    // Stereo-Peaks & Oszilloskop-Ringbuffer füttern
+    const float peakL = (buffer.getNumChannels() >= 1) ? buffer.getMagnitude (0, 0, numSamples) : 0.0f;
+    const float peakR = (buffer.getNumChannels() >= 2) ? buffer.getMagnitude (1, 0, numSamples) : peakL;
+
+    float prevL = outputPeakL.load (std::memory_order_relaxed);
+    while (peakL > prevL && ! outputPeakL.compare_exchange_weak (prevL, peakL, std::memory_order_relaxed)) {}
+
+    float prevR = outputPeakR.load (std::memory_order_relaxed);
+    while (peakR > prevR && ! outputPeakR.compare_exchange_weak (prevR, peakR, std::memory_order_relaxed)) {}
+
+    const auto* ch0 = (buffer.getNumChannels() >= 1) ? buffer.getReadPointer (0) : nullptr;
+    const auto* ch1 = (buffer.getNumChannels() >= 2) ? buffer.getReadPointer (1) : ch0;
+
+    if (ch0 != nullptr)
+    {
+        int writeIdx = scopeWritePos.load (std::memory_order_relaxed);
+        for (int i = 0; i < numSamples; ++i)
+        {
+            if (++scopeDecimator >= 4)
+            {
+                scopeDecimator = 0;
+                const float mono = 0.5f * (ch0[i] + ch1[i]);
+                scopeRingBuffer[static_cast<size_t> (writeIdx)].store (mono, std::memory_order_relaxed);
+                writeIdx = (writeIdx + 1) % scopeBufferSize;
+            }
+        }
+        scopeWritePos.store (writeIdx, std::memory_order_release);
     }
 }
 

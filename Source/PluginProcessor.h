@@ -6,6 +6,8 @@
 class NeomorphX1AudioProcessor : public juce::AudioProcessor
 {
 public:
+    static constexpr int scopeBufferSize = 256;
+
     NeomorphX1AudioProcessor();
     ~NeomorphX1AudioProcessor() override;
 
@@ -150,6 +152,7 @@ public:
         std::atomic<float> currentBpm { 120.0f };
         mutable std::array<std::atomic<int>, 2> activeSeqStep { -1, -1 };
         mutable std::array<std::atomic<float>, 2> liveLfoOut { 0.0f, 0.0f };
+        mutable std::atomic<float> liveEffectiveMorph { 0.5f };
     };
 
     int getCurrentSeqStep (int scene) const noexcept
@@ -164,6 +167,28 @@ public:
         return paramCache.liveLfoOut[idx].load();
     }
 
+    float getLiveEffectiveMorph() const noexcept { return paramCache.liveEffectiveMorph.load(); }
+    float getHostBpm() const noexcept            { return paramCache.currentBpm.load(); }
+    double getCurrentSampleRateHz() const noexcept { return currentSampleRateHz.load(); }
+
+    // Telemetrie für unteres Status-Panel (thread-safe für 30 Hz UI-Timer)
+    float consumePeakLeft() noexcept  { return outputPeakL.exchange (0.0f); }
+    float consumePeakRight() noexcept { return outputPeakR.exchange (0.0f); }
+    int getActiveVoiceCount() const noexcept { return activeVoiceCount.load(); }
+    int getLastMidiNote() const noexcept     { return lastMidiNote.load(); }
+    int getLastMidiVelocity() const noexcept { return lastMidiVelocity.load(); }
+    bool consumeMidiActivity() noexcept      { return midiActivityFlag.exchange (false); }
+
+    void copyScopeSamples (std::array<float, scopeBufferSize>& dest) const noexcept
+    {
+        const int writeIdx = scopeWritePos.load (std::memory_order_acquire);
+        for (int i = 0; i < scopeBufferSize; ++i)
+        {
+            const int srcIdx = (writeIdx + i) % scopeBufferSize;
+            dest[static_cast<size_t> (i)] = scopeRingBuffer[static_cast<size_t> (srcIdx)].load (std::memory_order_relaxed);
+        }
+    }
+
     juce::AudioProcessorValueTreeState apvts;
 
 private:
@@ -176,6 +201,19 @@ private:
     juce::String currentPresetName { "Init" };
     bool currentPresetIsSaved = false;
     std::atomic<bool> panicRequested { false };
+
+    // Audio- & MIDI-Telemetrie
+    std::atomic<double> currentSampleRateHz { 44100.0 };
+    std::atomic<float> outputPeakL { 0.0f };
+    std::atomic<float> outputPeakR { 0.0f };
+    std::atomic<int> activeVoiceCount { 0 };
+    std::atomic<int> lastMidiNote { -1 };
+    std::atomic<int> lastMidiVelocity { 0 };
+    std::atomic<bool> midiActivityFlag { false };
+
+    std::array<std::atomic<float>, scopeBufferSize> scopeRingBuffer {};
+    std::atomic<int> scopeWritePos { 0 };
+    int scopeDecimator = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NeomorphX1AudioProcessor)
 };

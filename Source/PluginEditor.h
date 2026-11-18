@@ -59,6 +59,13 @@ public:
         NumPages
     };
 
+    enum class BottomStripMode
+    {
+        Oscilloscope = 0,
+        MorphVector,
+        NumModes
+    };
+
     explicit NeomorphX1AudioProcessorEditor (NeomorphX1AudioProcessor&);
     ~NeomorphX1AudioProcessorEditor() override;
 
@@ -259,6 +266,7 @@ private:
     void showSettingsMenu();
 
     void drawLcdScreen (juce::Graphics& g, juce::Rectangle<float> lcdBounds);
+    void drawBottomStatusStrip (juce::Graphics& g, juce::Rectangle<float> stripBounds);
     void drawSceneLeds (juce::Graphics& g, float w, float h);
     void drawOscillatorSection (juce::Graphics& g, juce::Rectangle<float> panelBounds,
                                 int oscIndex, juce::Colour accentColour);
@@ -325,6 +333,19 @@ private:
     int lcdNotifyTicks = 0;
     int lastPaintedSeqStep = -1;
     float lastPaintedLfo   = 0.0f;
+
+    // Telemetrie-State für unteres Status-Strip-Panel
+    BottomStripMode bottomStripMode = BottomStripMode::Oscilloscope;
+    juce::Rectangle<float> bottomStripBounds;
+    juce::Rectangle<float> scopeClickArea;
+    std::array<float, NeomorphX1AudioProcessor::scopeBufferSize> scopeCache {};
+    float smoothedLevelL   = 0.0f;
+    float smoothedLevelR   = 0.0f;
+    float peakHoldL        = 0.0f;
+    float peakHoldR        = 0.0f;
+    int peakHoldTicksL     = 0;
+    int peakHoldTicksR     = 0;
+    int midiLedHoldTicks   = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NeomorphX1AudioProcessorEditor)
 };
