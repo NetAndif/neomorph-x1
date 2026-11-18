@@ -291,8 +291,9 @@ private:
     NeomorphX1AudioProcessor& audioProcessor;
     CyberpunkLookAndFeel cyberpunkLookAndFeel;
 
-    juce::Image backgroundImage;
-	std::array<juce::Image, static_cast<size_t> (ActiveTab::NumTabs)> tabImages;
+	juce::Image backgroundImage;
+    std::array<juce::Image, static_cast<size_t> (ActiveTab::NumTabs)> tabImages;
+    std::array<juce::TextButton, static_cast<size_t> (ActiveTab::NumTabs)> tabButtons;
     juce::TextButton settingsButton;
 
     // Top-Bar Preset-Verwaltung

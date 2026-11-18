@@ -2990,17 +2990,12 @@ void NeomorphX1AudioProcessorEditor::paint (juce::Graphics& g)
 	if (activeOverlay.isValid())
 		g.drawImage (activeOverlay, bounds, juce::RectanglePlacement::stretchToFit);
 
-    // Aktiven Tab in der Tab-Leiste dezent hervorheben
-    const auto activeTabRect = tabButtons[static_cast<size_t> (currentTab)].getBounds().toFloat();
-    if (! activeTabRect.isEmpty())
-    {
-        const auto cyan = juce::Colour::fromRGB (0, 240, 255);
-        g.setColour (cyan.withAlpha (0.14f));
-        g.fillRoundedRectangle (activeTabRect.reduced (2.0f, 2.0f), 3.0f);
-        g.setColour (cyan);
-        g.fillRect (activeTabRect.getX() + 4.0f, activeTabRect.getBottom() - 2.5f,
-                    activeTabRect.getWidth() - 8.0f, 2.5f);
-    }
+	if (backgroundImage.isValid())
+        g.drawImage (backgroundImage, bounds, juce::RectanglePlacement::stretchToFit);
+
+    const auto& activeOverlay = tabImages[static_cast<size_t> (currentTab)];
+    if (activeOverlay.isValid())
+        g.drawImage (activeOverlay, bounds, juce::RectanglePlacement::stretchToFit);
 
     // Exakter LCD-Rahmen (0.0774f, 0.2243f bis 0.2964f, 0.4053f)
     drawLcdScreen (g, juce::Rectangle<float> (0.0774f * w,
@@ -3062,10 +3057,10 @@ void NeomorphX1AudioProcessorEditor::resized()
                                                 (0.9481f - 0.9016f) * h);
 
     // 0. Top-Bar Preset-Verwaltung (exakte Koordinaten)
-    const float presetLeft   = 0.3815f * w;
-    const float presetTop    = 0.0150f * h;
+    const float presetLeft   = 0.3890f * w;
+    const float presetTop    = 0.0215f * h;
     const float presetRight  = 0.5965f * w;
-    const float presetBottom = 0.0530f * h;
+    const float presetBottom = 0.0520f * h;
     presetBox.setBounds (
         juce::roundToInt (presetLeft),
         juce::roundToInt (presetTop),
