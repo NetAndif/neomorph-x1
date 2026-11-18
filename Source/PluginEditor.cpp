@@ -2984,13 +2984,7 @@ void NeomorphX1AudioProcessorEditor::paint (juce::Graphics& g)
     const float w = bounds.getWidth();
     const float h = bounds.getHeight();
 
-    if (backgroundImage.isValid())
-        g.drawImage (backgroundImage, bounds, juce::RectanglePlacement::stretchToFit);
-		const auto& activeOverlay = tabImages[static_cast<size_t> (currentTab)];
-	if (activeOverlay.isValid())
-		g.drawImage (activeOverlay, bounds, juce::RectanglePlacement::stretchToFit);
-
-	if (backgroundImage.isValid())
+if (backgroundImage.isValid())
         g.drawImage (backgroundImage, bounds, juce::RectanglePlacement::stretchToFit);
 
     const auto& activeOverlay = tabImages[static_cast<size_t> (currentTab)];
@@ -3264,7 +3258,6 @@ void NeomorphX1AudioProcessorEditor::resized()
     const float oscPanelX[2] = { 0.3181f, 0.5662f };
     const float panelY       = 0.2673f * h;
     const float panelW       = 0.2380f * w;
-    const float panelH       = 0.2700f * h;
     const float oscKnobSize  = 0.034f * w;
 
     for (size_t i = 0; i < oscControls.size(); ++i)
