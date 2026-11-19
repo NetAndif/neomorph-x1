@@ -774,6 +774,14 @@ NeomorphX1AudioProcessor::NeomorphX1AudioProcessor()
      : apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
 #endif
 {
+	for (int k = 0; k < numAssignKnobs; ++k)
+    {
+        const auto idx = static_cast<size_t> (k);
+        assignKnobMidiCC[idx].store (-1, std::memory_order_relaxed);
+        assignPickupLocked[idx].store (false, std::memory_order_relaxed);
+        lastMidiCCNorm[idx].store (-1.0f, std::memory_order_relaxed);
+    }
+
     cacheParameterPointers();
 
     synth.addSound (new NeomorphSound());
@@ -1368,7 +1376,7 @@ bool NeomorphX1AudioProcessor::loadPresetFromFile (const juce::File& file, bool 
         xml->setAttribute ("presetName", loadedName);
         xml->writeTo (destFile);
     }
-
+	resetAllPickupLocks();
     panicReset();
     return true;
 }
@@ -1380,6 +1388,7 @@ void NeomorphX1AudioProcessor::loadInitPatch()
 
     currentPresetName    = "Init";
     currentPresetIsSaved = false;
+	resetAllPickupLocks();
     panicReset();
 }
 
@@ -1557,14 +1566,89 @@ void NeomorphX1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
                 param->setValueNotifyingHost (param->convertTo0to1 (juce::jlimit (-1.0f, 1.0f, normPitch)));
             midiActivityFlag.store (true);
         }
-        else if (msg.isController())
+		else if (msg.isController())
         {
-            if (msg.getControllerNumber() == 1)
+            const int ccNum  = msg.getControllerNumber();
+            const float norm = static_cast<float> (msg.getControllerValue()) / 127.0f;
+
+            if (ccNum == 1)
             {
-                const float normMod = static_cast<float> (msg.getControllerValue()) / 127.0f;
                 if (auto* param = apvts.getParameter ("mod_wheel"))
-                    param->setValueNotifyingHost (normMod);
+                    param->setValueNotifyingHost (norm);
             }
+
+            // 1. Aktives MIDI Learn prüfen
+            const int learnSlot = midiLearnTargetSlot.exchange (-1, std::memory_order_acq_rel);
+            if (learnSlot >= 0 && learnSlot < numAssignKnobs)
+            {
+                for (int k = 0; k < numAssignKnobs; ++k)
+                {
+                    if (k != learnSlot && assignKnobMidiCC[static_cast<size_t> (k)].load (std::memory_order_relaxed) == ccNum)
+                    {
+                        assignKnobMidiCC[static_cast<size_t> (k)].store (-1, std::memory_order_relaxed);
+                        assignPickupLocked[static_cast<size_t> (k)].store (false, std::memory_order_relaxed);
+                    }
+                }
+
+                const auto slotIdx = static_cast<size_t> (learnSlot);
+                assignKnobMidiCC[slotIdx].store (ccNum, std::memory_order_release);
+                assignPickupLocked[slotIdx].store (false, std::memory_order_release);
+                lastMidiCCNorm[slotIdx].store (-1.0f, std::memory_order_release);
+                lastLearnedAssignSlot.store (learnSlot, std::memory_order_release);
+            }
+
+            // 2. Zugewiesene Assign-Knobs (knob_3 .. knob_10) mit Soft-Takeover steuern
+            const bool usePickup = midiPickupEnabled.load (std::memory_order_acquire);
+
+            for (int k = 0; k < numAssignKnobs; ++k)
+            {
+                const auto idx = static_cast<size_t> (k);
+                if (assignKnobMidiCC[idx].load (std::memory_order_acquire) != ccNum)
+                    continue;
+
+                const auto paramID = "knob_" + juce::String (k + 3);
+                auto* param = apvts.getParameter (paramID);
+                if (param == nullptr)
+                    continue;
+
+                const float currentVal = param->getValue();
+                const float prevMidi   = lastMidiCCNorm[idx].exchange (norm, std::memory_order_acq_rel);
+
+                if (! usePickup)
+                {
+                    assignPickupLocked[idx].store (true, std::memory_order_release);
+                    param->setValueNotifyingHost (norm);
+                    continue;
+                }
+
+                bool locked = assignPickupLocked[idx].load (std::memory_order_acquire);
+
+                // Falls der Parameter seit dem letzten MIDI-Event per Maus/Preset verändert wurde -> Pickup neu sperren
+                if (locked && prevMidi >= 0.0f && std::abs (currentVal - prevMidi) > 0.025f)
+                {
+                    locked = false;
+                    assignPickupLocked[idx].store (false, std::memory_order_release);
+                }
+
+                if (! locked)
+                {
+                    constexpr float pickupTolerance = 0.035f; // ~4 MIDI-Steps Fangbereich
+                    const bool withinTolerance = (std::abs (norm - currentVal) <= pickupTolerance);
+                    const bool crossedTarget   = (prevMidi >= 0.0f)
+                                              && ((prevMidi < currentVal && norm >= currentVal)
+                                               || (prevMidi > currentVal && norm <= currentVal));
+
+                    if (withinTolerance || crossedTarget)
+                    {
+                        locked = true;
+                        assignPickupLocked[idx].store (true, std::memory_order_release);
+                    }
+                }
+
+                if (locked)
+                    param->setValueNotifyingHost (norm);
+            }
+
             midiActivityFlag.store (true);
         }
     }
@@ -1647,6 +1731,12 @@ void NeomorphX1AudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     {
         xml->setAttribute ("presetName", currentPresetName);
         xml->setAttribute ("presetIsSaved", currentPresetIsSaved);
+        xml->setAttribute ("midiPickupEnabled", isMidiPickupEnabled());
+
+        for (int k = 0; k < numAssignKnobs; ++k)
+            xml->setAttribute ("assignMidiCC_" + juce::String (k + 1),
+                               assignKnobMidiCC[static_cast<size_t> (k)].load (std::memory_order_acquire));
+
         copyXmlToBinary (*xml, destData);
     }
 }
@@ -1658,8 +1748,70 @@ void NeomorphX1AudioProcessor::setStateInformation (const void* data, int sizeIn
     {
         currentPresetName    = xmlState->getStringAttribute ("presetName", "Init");
         currentPresetIsSaved = xmlState->getBoolAttribute ("presetIsSaved", ! currentPresetName.equalsIgnoreCase ("Init"));
+        setMidiPickupEnabled (xmlState->getBoolAttribute ("midiPickupEnabled", true));
+
+        for (int k = 0; k < numAssignKnobs; ++k)
+        {
+            const int savedCC = xmlState->getIntAttribute ("assignMidiCC_" + juce::String (k + 1), -1);
+            assignKnobMidiCC[static_cast<size_t> (k)].store (savedCC, std::memory_order_release);
+        }
+
         apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
     }
+}
+
+juce::File NeomorphX1AudioProcessor::getMidiMapDirectory() const
+{
+    auto baseDir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory);
+   #if JUCE_MAC
+    auto dir = baseDir.getChildFile ("Application Support").getChildFile ("NeomorphX1").getChildFile ("MidiMaps");
+   #else
+    auto dir = baseDir.getChildFile ("NeomorphX1").getChildFile ("MidiMaps");
+   #endif
+
+    if (! dir.exists())
+        dir.createDirectory();
+
+    return dir;
+}
+
+bool NeomorphX1AudioProcessor::saveMidiMappingToFile (const juce::File& file) const
+{
+    auto xml = std::make_unique<juce::XmlElement> ("NEOMORPH_MIDI_MAP");
+    xml->setAttribute ("version", 1);
+    xml->setAttribute ("pickupEnabled", midiPickupEnabled.load (std::memory_order_acquire));
+
+    for (int k = 0; k < numAssignKnobs; ++k)
+    {
+        auto* slotElem = xml->createNewChildElement ("AssignSlot");
+        slotElem->setAttribute ("index", k + 1);
+        slotElem->setAttribute ("cc", assignKnobMidiCC[static_cast<size_t> (k)].load (std::memory_order_acquire));
+    }
+
+    return xml->writeTo (file);
+}
+
+bool NeomorphX1AudioProcessor::loadMidiMappingFromFile (const juce::File& file)
+{
+    if (! file.existsAsFile())
+        return false;
+
+    std::unique_ptr<juce::XmlElement> xml (juce::XmlDocument::parse (file));
+    if (xml == nullptr || ! xml->hasTagName ("NEOMORPH_MIDI_MAP"))
+        return false;
+
+    clearAllMidiMappings();
+    midiPickupEnabled.store (xml->getBoolAttribute ("pickupEnabled", true), std::memory_order_release);
+
+    for (auto* child : xml->getChildWithTagNameIterator ("AssignSlot"))
+    {
+        const int slotIdx = child->getIntAttribute ("index", 0) - 1;
+        const int ccNum   = child->getIntAttribute ("cc", -1);
+        if (slotIdx >= 0 && slotIdx < numAssignKnobs && ccNum >= 0 && ccNum <= 127)
+            assignKnobMidiCC[static_cast<size_t> (slotIdx)].store (ccNum, std::memory_order_release);
+    }
+
+    return true;
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

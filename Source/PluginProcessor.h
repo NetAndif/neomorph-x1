@@ -43,6 +43,97 @@ public:
     void swapSceneParameters();
     void resetSceneParameters (int scene);
     void randomizeSceneParameters (int scene);
+	
+	// MIDI Learn & Soft-Takeover (Abholen) für Assign 1..8
+    static constexpr int numAssignKnobs = 8;
+
+    void cancelMidiLearn() noexcept
+    {
+        midiLearnTargetSlot.store (-1, std::memory_order_release);
+    }
+
+    int getMidiLearnTargetSlot() const noexcept
+    {
+        return midiLearnTargetSlot.load (std::memory_order_acquire);
+    }
+
+    int getAssignedMidiCC (int assignIndex) const noexcept
+    {
+        if (assignIndex >= 0 && assignIndex < numAssignKnobs)
+            return assignKnobMidiCC[static_cast<size_t> (assignIndex)].load (std::memory_order_acquire);
+        return -1;
+    }
+
+    int consumeLastLearnedAssignSlot() noexcept
+    {
+        return lastLearnedAssignSlot.exchange (-1, std::memory_order_acq_rel);
+    }
+
+    void setMidiPickupEnabled (bool enabled) noexcept
+    {
+        midiPickupEnabled.store (enabled, std::memory_order_release);
+        if (enabled)
+            resetAllPickupLocks();
+    }
+
+    bool isMidiPickupEnabled() const noexcept
+    {
+        return midiPickupEnabled.load (std::memory_order_acquire);
+    }
+
+    bool isAssignWaitingForPickup (int assignIndex) const noexcept
+    {
+        if (! isMidiPickupEnabled() || assignIndex < 0 || assignIndex >= numAssignKnobs)
+            return false;
+        if (assignKnobMidiCC[static_cast<size_t> (assignIndex)].load (std::memory_order_acquire) < 0)
+            return false;
+        return ! assignPickupLocked[static_cast<size_t> (assignIndex)].load (std::memory_order_acquire);
+    }
+
+    void resetAllPickupLocks() noexcept
+    {
+        for (int k = 0; k < numAssignKnobs; ++k)
+        {
+            assignPickupLocked[static_cast<size_t> (k)].store (false, std::memory_order_release);
+            lastMidiCCNorm[static_cast<size_t> (k)].store (-1.0f, std::memory_order_release);
+        }
+    }
+
+    void clearAllMidiMappings() noexcept
+    {
+        midiLearnTargetSlot.store (-1, std::memory_order_release);
+        for (int k = 0; k < numAssignKnobs; ++k)
+        {
+            assignKnobMidiCC[static_cast<size_t> (k)].store (-1, std::memory_order_release);
+            assignPickupLocked[static_cast<size_t> (k)].store (false, std::memory_order_release);
+            lastMidiCCNorm[static_cast<size_t> (k)].store (-1.0f, std::memory_order_release);
+        }
+    }
+
+    // MIDI-Mappings als eigene XML-Datei speichern & laden
+    juce::File getMidiMapDirectory() const;
+    bool saveMidiMappingToFile (const juce::File& file) const;
+    bool loadMidiMappingFromFile (const juce::File& file);
+	
+	void startMidiLearnForAssign (int assignIndex) noexcept
+    {
+        if (assignIndex >= 0 && assignIndex < numAssignKnobs)
+            midiLearnTargetSlot.store (assignIndex, std::memory_order_release);
+    }
+
+    void clearMidiLearnForAssign (int assignIndex) noexcept
+    {
+        if (assignIndex >= 0 && assignIndex < numAssignKnobs)
+        {
+            const auto idx = static_cast<size_t> (assignIndex);
+            assignKnobMidiCC[idx].store (-1, std::memory_order_release);
+            assignPickupLocked[idx].store (false, std::memory_order_release);
+            lastMidiCCNorm[idx].store (-1.0f, std::memory_order_release);
+
+            if (midiLearnTargetSlot.load (std::memory_order_acquire) == assignIndex)
+                midiLearnTargetSlot.store (-1, std::memory_order_release);
+        }
+    }
 
     // Preset-Verwaltung & Engine-Panic
     juce::File getPresetDirectory() const;
@@ -214,6 +305,13 @@ private:
     std::array<std::atomic<float>, scopeBufferSize> scopeRingBuffer {};
     std::atomic<int> scopeWritePos { 0 };
     int scopeDecimator = 0;
+
+	std::array<std::atomic<int>, numAssignKnobs> assignKnobMidiCC {};
+    std::atomic<int> midiLearnTargetSlot   { -1 };
+    std::atomic<int> lastLearnedAssignSlot { -1 };
+	std::atomic<bool> midiPickupEnabled { true }; // Standardmäßig aktiv
+    std::array<std::atomic<bool>, numAssignKnobs> assignPickupLocked {};
+    std::array<std::atomic<float>, numAssignKnobs> lastMidiCCNorm {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NeomorphX1AudioProcessor)
 };

@@ -4,36 +4,9 @@
 #include "PluginProcessor.h"
 #include "CyberpunkLookAndFeel.h"
 #include "BinaryData.h"
-
-class SpringBackSlider : public juce::Slider
-{
-public:
-    bool springBackEnabled = false;
-    double restingValue    = 0.0;
-
-    void mouseUp (const juce::MouseEvent& event) override
-    {
-        juce::Slider::mouseUp (event);
-        if (springBackEnabled)
-            setValue (restingValue, juce::sendNotificationSync);
-    }
-};
-
-class TopBarPresetButton : public juce::TextButton
-{
-public:
-    std::function<void()> onRightClick;
-
-    void mouseUp (const juce::MouseEvent& e) override
-    {
-        if (e.mods.isRightButtonDown() && onRightClick != nullptr)
-        {
-            onRightClick();
-            return;
-        }
-        juce::TextButton::mouseUp (e);
-    }
-};
+#include "UI/CustomControls.h"
+#include "UI/FreeEgCanvas.h"
+#include "UI/StepSeqCanvas.h"
 
 class NeomorphX1AudioProcessorEditor : public juce::AudioProcessorEditor,
                                        private juce::Timer
@@ -74,124 +47,51 @@ public:
     void mouseDown (const juce::MouseEvent& event) override;
     bool keyPressed (const juce::KeyPress& key) override;
 
+    // Zugriffspunkte für ausgelagerte Sub-Komponenten (FreeEgCanvas, StepSeqCanvas)
+    NeomorphX1AudioProcessor& getProcessor() noexcept { return audioProcessor; }
+    int getEditingScene() const noexcept { return editingScene; }
+    bool isSceneLinkEnabled() const noexcept { return sceneLink; }
+    int getStepSeqModeIndex() const noexcept { return stepSeqControls.modeBox.getSelectedItemIndex(); }
+    int getStepSeqLengthIndex() const noexcept { return stepSeqControls.lengthBox.getSelectedItemIndex(); }
+    void triggerLcdNotification (const juce::String& title, const juce::String& value);
+
 private:
-    class FreeEgCanvas : public juce::Component
-    {
-    public:
-        explicit FreeEgCanvas (NeomorphX1AudioProcessorEditor& ownerEditor);
-        void paint (juce::Graphics& g) override;
-        void mouseDown (const juce::MouseEvent& e) override;
-        void mouseDrag (const juce::MouseEvent& e) override;
-        void mouseUp (const juce::MouseEvent& e) override;
-        void mouseMove (const juce::MouseEvent& e) override;
-
-    private:
-        juce::Point<float> getPointPosition (int idx, juce::Rectangle<float> inner) const;
-        int findPointAt (juce::Point<float> pos, juce::Rectangle<float> inner) const;
-
-        NeomorphX1AudioProcessorEditor& owner;
-        int draggedPoint = -1;
-        int hoveredPoint = -1;
-    };
-
-    class StepSeqCanvas : public juce::Component
-    {
-    public:
-        explicit StepSeqCanvas (NeomorphX1AudioProcessorEditor& ownerEditor);
-        void paint (juce::Graphics& g) override;
-        void mouseDown (const juce::MouseEvent& e) override;
-        void mouseDrag (const juce::MouseEvent& e) override;
-
-    private:
-        void applyMouseEdit (const juce::MouseEvent& e, bool toggleGateOnly);
-        NeomorphX1AudioProcessorEditor& owner;
-        int lastEditedStep = -1;
-    };
-
     struct OscillatorControls
     {
         juce::ComboBox waveBox;
-
-        juce::Slider octaveKnob;
-        juce::Slider semiKnob;
-        juce::Slider detuneKnob;
-        juce::Slider positionKnob;
-
-        juce::Slider morphKnob;
-        juce::Slider phaseKnob;
-        juce::Slider panKnob;
-        juce::Slider levelKnob;
+        juce::Slider octaveKnob, semiKnob, detuneKnob, positionKnob;
+        juce::Slider morphKnob, phaseKnob, panKnob, levelKnob;
 
         std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> waveAttachment;
-
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   octaveAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   semiAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   detuneAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   positionAttachment;
-
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   morphAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   phaseAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   panAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   levelAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> octaveAttachment, semiAttachment, detuneAttachment, positionAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> morphAttachment, phaseAttachment, panAttachment, levelAttachment;
     };
 
     struct FilterControls
     {
-        juce::ComboBox typeBox;
-        juce::ComboBox routingBox;
+        juce::ComboBox typeBox, routingBox;
+        juce::Slider cutoffKnob, resonanceKnob;
+        juce::Slider driveKnob, envAmtKnob, keytrackKnob, velSensKnob;
 
-        juce::Slider cutoffKnob;
-        juce::Slider resonanceKnob;
-
-        juce::Slider driveKnob;
-        juce::Slider envAmtKnob;
-        juce::Slider keytrackKnob;
-        juce::Slider velSensKnob;
-
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> typeAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> routingAttachment;
-
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   cutoffAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   resonanceAttachment;
-
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   driveAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   envAmtAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   keytrackAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   velSensAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> typeAttachment, routingAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> cutoffAttachment, resonanceAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> driveAttachment, envAmtAttachment, keytrackAttachment, velSensAttachment;
     };
 
     struct EnvelopeControls
     {
-        juce::Slider attackKnob;
-        juce::Slider decayKnob;
-        juce::Slider sustainKnob;
-        juce::Slider releaseKnob;
-
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attackAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> decayAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> sustainAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> releaseAttachment;
+        juce::Slider attackKnob, decayKnob, sustainKnob, releaseKnob;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attackAttachment, decayAttachment, sustainAttachment, releaseAttachment;
     };
 
     struct FreeEgControls
     {
         FreeEgCanvas canvas;
+        juce::ComboBox targetBox, modeBox, syncBox;
+        juce::Slider timeKnob, amountKnob, smoothKnob;
 
-        juce::ComboBox targetBox;
-        juce::ComboBox modeBox;
-        juce::ComboBox syncBox;
-
-        juce::Slider timeKnob;
-        juce::Slider amountKnob;
-        juce::Slider smoothKnob;
-
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> targetAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> modeAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> syncAttachment;
-
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   timeAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   amountAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   smoothAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> targetAttachment, modeAttachment, syncAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> timeAttachment, amountAttachment, smoothAttachment;
 
         explicit FreeEgControls (NeomorphX1AudioProcessorEditor& owner) : canvas (owner) {}
     };
@@ -199,67 +99,59 @@ private:
     struct StepSeqControls
     {
         StepSeqCanvas canvas;
+        juce::ComboBox modeBox, lengthBox, rateBox;
+        juce::Slider gateKnob, swingKnob, amountKnob;
 
-        juce::ComboBox modeBox;
-        juce::ComboBox lengthBox;
-        juce::ComboBox rateBox;
-
-        juce::Slider gateKnob;
-        juce::Slider swingKnob;
-        juce::Slider amountKnob;
-
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> modeAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lengthAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> rateAttachment;
-
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   gateAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   swingAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   amountAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> modeAttachment, lengthAttachment, rateAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> gateAttachment, swingAttachment, amountAttachment;
 
         explicit StepSeqControls (NeomorphX1AudioProcessorEditor& owner) : canvas (owner) {}
     };
 
     struct ModSlotControls
     {
-        juce::ComboBox srcBox;
-        juce::ComboBox dstBox;
-        juce::Slider   amtKnob;
-
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> srcAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> dstAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   amtAttachment;
+        juce::ComboBox srcBox, dstBox;
+        juce::Slider amtKnob;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> srcAttachment, dstAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> amtAttachment;
     };
 
     struct ModMatrixControls
     {
         std::array<ModSlotControls, 4> slots;
-
         juce::ComboBox lfoSyncBox;
-        juce::Slider   lfoRateKnob;
-        juce::Slider   lfoFadeKnob;
-        juce::Slider   lfoDepthKnob;
+        juce::Slider lfoRateKnob, lfoFadeKnob, lfoDepthKnob;
 
         std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoSyncAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   lfoRateAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   lfoFadeAttachment;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>   lfoDepthAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment, lfoFadeAttachment, lfoDepthAttachment;
     };
 
     void timerCallback() override;
-    void triggerLcdNotification (const juce::String& title, const juce::String& value);
 
+    // MIDI Learn Menü für Assign 1..8
+    void showAssignKnobMidiLearnMenu (int assignIndex);
+    void updateAssignKnobTooltip (int assignIndex);
+	
+	// Save + Load MIDI Assignments
+	void handleSaveMidiMappingClick();
+	void handleLoadMidiMappingClick();
+
+    // Keypad
     void setKeypadTarget (const juce::String& paramID, const juce::String& displayName);
     void handleKeypadDigit (int digit);
     void handleKeypadClear();
     void handleKeypadEnter();
     void handleKeypadToggleSign();
 
+    // Presets
     void refreshPresetList();
     void handleSavePresetClick (bool forceSaveAsDialog);
     void handleLoadPresetClick();
     void handlePanicClick();
     void stepPreset (int delta);
 
+    // Tabs & Attachments (implementiert in UI/EditorTabs.cpp)
+    void initTabControls();
     void setActiveTab (ActiveTab newTab);
     void setEditingScene (int newScene);
     void handleSceneButton (int buttonIndex);
@@ -272,26 +164,22 @@ private:
     void updateTabVisibility();
     void showSettingsMenu();
 
+    // Rendering (implementiert in UI/EditorDrawing.cpp)
     void drawLcdScreen (juce::Graphics& g, juce::Rectangle<float> lcdBounds);
     void drawBottomStatusStrip (juce::Graphics& g, juce::Rectangle<float> stripBounds);
     void drawSceneLeds (juce::Graphics& g, float w, float h);
-    void drawOscillatorSection (juce::Graphics& g, juce::Rectangle<float> panelBounds,
-                                int oscIndex, juce::Colour accentColour);
-    void drawFilterPanels (juce::Graphics& g, juce::Rectangle<float> leftBounds,
-                           juce::Rectangle<float> rightBounds);
-    void drawEnvelopeSection (juce::Graphics& g, juce::Rectangle<float> panelBounds,
-                              int envIndex, juce::Colour accentColour);
-    void drawFreeEgPanels (juce::Graphics& g, juce::Rectangle<float> leftBounds,
-                           juce::Rectangle<float> rightBounds);
-    void drawStepSeqPanels (juce::Graphics& g, juce::Rectangle<float> leftBounds,
-                            juce::Rectangle<float> rightBounds);
-    void drawModMatrixPanels (juce::Graphics& g, juce::Rectangle<float> leftBounds,
-                              juce::Rectangle<float> rightBounds);
+    void drawAssignMidiLearnBadges (juce::Graphics& g);
+    void drawOscillatorSection (juce::Graphics& g, juce::Rectangle<float> panelBounds, int oscIndex, juce::Colour accentColour);
+    void drawFilterPanels (juce::Graphics& g, juce::Rectangle<float> leftBounds, juce::Rectangle<float> rightBounds);
+    void drawEnvelopeSection (juce::Graphics& g, juce::Rectangle<float> panelBounds, int envIndex, juce::Colour accentColour);
+    void drawFreeEgPanels (juce::Graphics& g, juce::Rectangle<float> leftBounds, juce::Rectangle<float> rightBounds);
+    void drawStepSeqPanels (juce::Graphics& g, juce::Rectangle<float> leftBounds, juce::Rectangle<float> rightBounds);
+    void drawModMatrixPanels (juce::Graphics& g, juce::Rectangle<float> leftBounds, juce::Rectangle<float> rightBounds);
 
     NeomorphX1AudioProcessor& audioProcessor;
     CyberpunkLookAndFeel cyberpunkLookAndFeel;
 
-	juce::Image backgroundImage;
+    juce::Image backgroundImage;
     std::array<juce::Image, static_cast<size_t> (ActiveTab::NumTabs)> tabImages;
     std::array<juce::TextButton, static_cast<size_t> (ActiveTab::NumTabs)> tabButtons;
     juce::TextButton settingsButton;
@@ -306,7 +194,7 @@ private:
     std::unique_ptr<juce::FileChooser> activeFileChooser;
     bool suppressPresetBoxCallback = false;
 
-    // 10er-Nummernblock (1-9, CLR, 0, ENT)
+    // 10er-Nummernblock
     std::array<juce::TextButton, 12> keypadButtons;
     juce::String keypadTargetParamID { "knob_1" };
     juce::String keypadTargetLabel   { "MASTER VOLUME" };
@@ -322,7 +210,8 @@ private:
     std::array<juce::TextButton, 4> lcdPageButtons;
     LcdPage currentLcdPage = LcdPage::Patch;
 
-    std::array<juce::Slider, 10> matrixKnobs;
+    // [0] = Master Vol, [1] = Master Pan, [2..9] = Assign 1..8 (mit MIDI Learn)
+    std::array<AssignableKnobSlider, 10> matrixKnobs;
     std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>, 10> knobAttachments;
 
     std::array<juce::Slider, 3> sceneFaders;
@@ -349,7 +238,6 @@ private:
     int lastPaintedSeqStep = -1;
     float lastPaintedLfo   = 0.0f;
 
-    // Telemetrie-State für unteres Status-Strip-Panel
     BottomStripMode bottomStripMode = BottomStripMode::Oscilloscope;
     juce::Rectangle<float> bottomStripBounds;
     juce::Rectangle<float> scopeClickArea;

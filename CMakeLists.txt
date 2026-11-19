@@ -72,7 +72,14 @@ target_sources(NeomorphX1
         Source/PluginProcessor.h
         Source/PluginEditor.cpp
         Source/PluginEditor.h
-		Source/CyberpunkLookAndFeel.h
+        Source/CyberpunkLookAndFeel.h
+        Source/UI/CustomControls.h
+        Source/UI/FreeEgCanvas.h
+        Source/UI/FreeEgCanvas.cpp
+        Source/UI/StepSeqCanvas.h
+        Source/UI/StepSeqCanvas.cpp
+        Source/UI/EditorDrawing.cpp
+        Source/UI/EditorTabs.cpp
 )
 
 # Linken gegen BinaryData (falls vorhanden) und JUCE Module
