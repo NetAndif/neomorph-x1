@@ -961,6 +961,7 @@ void NeomorphX1AudioProcessorEditor::drawAssignMidiLearnBadges (juce::Graphics& 
         const auto& knob = matrixKnobs[static_cast<size_t> (assignIdx + 2)];
         const auto kb    = knob.getBounds().toFloat();
         const int cc     = audioProcessor.getAssignedMidiCC (assignIdx);
+		const bool isRelative    = (audioProcessor.getAssignMidiCCMode (assignIdx) != NeomorphX1AudioProcessor::MidiCCMode::Absolute);
 
         if (learningSlot == assignIdx)
         {
@@ -988,7 +989,8 @@ void NeomorphX1AudioProcessorEditor::drawAssignMidiLearnBadges (juce::Graphics& 
             g.drawRoundedRectangle (badge, 2.5f, 0.9f);
             g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
 
-            const auto text = waitingPickup ? ("CC" + juce::String (cc) + " PK")
+			const auto text = isRelative    ? ("CC" + juce::String (cc) + " REL")
+                            : waitingPickup ? ("CC" + juce::String (cc) + " PK")
                                             : ("CC " + juce::String (cc));
             g.drawText (text, badge, juce::Justification::centred);
         }

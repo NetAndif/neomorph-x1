@@ -81,9 +81,11 @@ public:
         return midiPickupEnabled.load (std::memory_order_acquire);
     }
 
-    bool isAssignWaitingForPickup (int assignIndex) const noexcept
+	bool isAssignWaitingForPickup (int assignIndex) const noexcept
     {
         if (! isMidiPickupEnabled() || assignIndex < 0 || assignIndex >= numAssignKnobs)
+            return false;
+        if (getAssignMidiCCMode (assignIndex) != MidiCCMode::Absolute)
             return false;
         if (assignKnobMidiCC[static_cast<size_t> (assignIndex)].load (std::memory_order_acquire) < 0)
             return false;
@@ -107,7 +109,33 @@ public:
             assignKnobMidiCC[static_cast<size_t> (k)].store (-1, std::memory_order_release);
             assignPickupLocked[static_cast<size_t> (k)].store (false, std::memory_order_release);
             lastMidiCCNorm[static_cast<size_t> (k)].store (-1.0f, std::memory_order_release);
+			assignKnobCCMode[static_cast<size_t> (k)].store (static_cast<int> (MidiCCMode::Absolute), std::memory_order_relaxed);
         }
+    }
+
+	enum class MidiCCMode : int
+    {
+        Absolute = 0,
+        RelativeTwosComp = 1,   // +1..+63 = 1..63 | -1..-63 = 127..65 (Novation / Ableton / NI)
+        RelativeBinOffset = 2   // +1..+63 = 65..127 | -1..-63 = 63..1 (Arturia / Behringer)
+    };
+
+    void setAssignMidiCCMode (int assignIndex, MidiCCMode mode) noexcept
+    {
+        if (assignIndex >= 0 && assignIndex < numAssignKnobs)
+        {
+            const auto idx = static_cast<size_t> (assignIndex);
+            assignKnobCCMode[idx].store (static_cast<int> (mode), std::memory_order_release);
+            assignPickupLocked[idx].store (false, std::memory_order_release);
+            lastMidiCCNorm[idx].store (-1.0f, std::memory_order_release);
+        }
+    }
+
+    MidiCCMode getAssignMidiCCMode (int assignIndex) const noexcept
+    {
+        if (assignIndex >= 0 && assignIndex < numAssignKnobs)
+            return static_cast<MidiCCMode> (assignKnobCCMode[static_cast<size_t> (assignIndex)].load (std::memory_order_acquire));
+        return MidiCCMode::Absolute;
     }
 
     // MIDI-Mappings als eigene XML-Datei speichern & laden
@@ -129,6 +157,7 @@ public:
             assignKnobMidiCC[idx].store (-1, std::memory_order_release);
             assignPickupLocked[idx].store (false, std::memory_order_release);
             lastMidiCCNorm[idx].store (-1.0f, std::memory_order_release);
+			assignKnobCCMode[idx].store (static_cast<int> (MidiCCMode::Absolute), std::memory_order_relaxed);
 
             if (midiLearnTargetSlot.load (std::memory_order_acquire) == assignIndex)
                 midiLearnTargetSlot.store (-1, std::memory_order_release);
@@ -312,6 +341,7 @@ private:
 	std::atomic<bool> midiPickupEnabled { true }; // Standardmäßig aktiv
     std::array<std::atomic<bool>, numAssignKnobs> assignPickupLocked {};
     std::array<std::atomic<float>, numAssignKnobs> lastMidiCCNorm {};
+	std::array<std::atomic<int>, numAssignKnobs> assignKnobCCMode {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NeomorphX1AudioProcessor)
 };

@@ -259,9 +259,6 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
         audioProcessor.apvts, "mod_wheel", modWheel);
 	initTabControls();
 
-    const auto cyanAccent    = juce::Colour::fromRGB (0, 240, 255);
-    const auto magentaAccent = juce::Colour::fromRGB (255, 60, 180);
-
     startTimerHz (30);
 
     setResizable (true, true);
@@ -362,6 +359,14 @@ void NeomorphX1AudioProcessorEditor::showAssignKnobMidiLearnMenu (int assignInde
 
     juce::PopupMenu menu;
     menu.addSectionHeader ("ASSIGN " + juce::String (assignIndex + 1) + " // MIDI LEARN");
+	
+	const auto currentMode = audioProcessor.getAssignMidiCCMode (assignIndex);
+
+    juce::PopupMenu modeMenu;
+    modeMenu.addItem (10, "Absolute (0-127)",                     true, currentMode == NeomorphX1AudioProcessor::MidiCCMode::Absolute);
+    modeMenu.addItem (11, "Relative (2's Comp: 1..63 / 127..65)", true, currentMode == NeomorphX1AudioProcessor::MidiCCMode::RelativeTwosComp);
+    modeMenu.addItem (12, "Relative (Bin Offset: 65..127 / 63..1)", true, currentMode == NeomorphX1AudioProcessor::MidiCCMode::RelativeBinOffset);
+    menu.addSubMenu ("CC Mode", modeMenu);
 
     if (isLearning)
         menu.addItem (2, "Cancel MIDI Learn");
@@ -394,6 +399,16 @@ void NeomorphX1AudioProcessorEditor::showAssignKnobMidiLearnMenu (int assignInde
             audioProcessor.clearMidiLearnForAssign (assignIndex);
             updateAssignKnobTooltip (assignIndex);
             triggerLcdNotification ("ASSIGN " + juce::String (assignIndex + 1), "MIDI CC CLEARED");
+            repaint();
+        }
+		else if (result >= 10 && result <= 12)
+        {
+            const auto newMode = static_cast<NeomorphX1AudioProcessor::MidiCCMode> (result - 10);
+            audioProcessor.setAssignMidiCCMode (assignIndex, newMode);
+            updateAssignKnobTooltip (assignIndex);
+
+            const char* modeNames[3] = { "ABSOLUTE", "REL (2'S COMP)", "REL (BIN OFFSET)" };
+            triggerLcdNotification ("ASSIGN " + juce::String (assignIndex + 1) + " MODE", modeNames[result - 10]);
             repaint();
         }
     });

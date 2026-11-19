@@ -780,6 +780,7 @@ NeomorphX1AudioProcessor::NeomorphX1AudioProcessor()
         assignKnobMidiCC[idx].store (-1, std::memory_order_relaxed);
         assignPickupLocked[idx].store (false, std::memory_order_relaxed);
         lastMidiCCNorm[idx].store (-1.0f, std::memory_order_relaxed);
+		assignKnobCCMode[idx].store (static_cast<int> (MidiCCMode::Absolute), std::memory_order_relaxed);
     }
 
     cacheParameterPointers();
@@ -1610,8 +1611,40 @@ void NeomorphX1AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
                 auto* param = apvts.getParameter (paramID);
                 if (param == nullptr)
                     continue;
-
+				
+				const int rawCCVal  = msg.getControllerValue();
+                const auto ccMode   = static_cast<MidiCCMode> (assignKnobCCMode[idx].load (std::memory_order_acquire));
                 const float currentVal = param->getValue();
+
+				// Relative Encoder-Modi (kein Pickup nötig)
+                if (ccMode != MidiCCMode::Absolute)
+                {
+                    int deltaSteps = 0;
+
+                    if (ccMode == MidiCCMode::RelativeTwosComp)
+                    {
+                        if (rawCCVal >= 1 && rawCCVal <= 63)
+                            deltaSteps = rawCCVal;
+                        else if (rawCCVal >= 65 && rawCCVal <= 127)
+                            deltaSteps = rawCCVal - 128; // 127 -> -1, 126 -> -2, ...
+                    }
+                    else if (ccMode == MidiCCMode::RelativeBinOffset)
+                    {
+                        if (rawCCVal >= 65 && rawCCVal <= 127)
+                            deltaSteps = rawCCVal - 64;  // 65 -> +1, 66 -> +2, ...
+                        else if (rawCCVal >= 1 && rawCCVal <= 63)
+                            deltaSteps = rawCCVal - 64;  // 63 -> -1, 62 -> -2, ...
+                    }
+
+                    if (deltaSteps != 0)
+                    {
+                        // 127 Schritte = voller Regelweg (feinfühlig & exakt wie 7-Bit CC)
+                        const float stepSize = 1.0f / 127.0f;
+                        const float nextVal  = juce::jlimit (0.0f, 1.0f, currentVal + static_cast<float> (deltaSteps) * stepSize);
+                        param->setValueNotifyingHost (nextVal);
+                    }
+                    continue;
+                }
                 const float prevMidi   = lastMidiCCNorm[idx].exchange (norm, std::memory_order_acq_rel);
 
                 if (! usePickup)
@@ -1734,9 +1767,13 @@ void NeomorphX1AudioProcessor::getStateInformation (juce::MemoryBlock& destData)
         xml->setAttribute ("midiPickupEnabled", isMidiPickupEnabled());
 
         for (int k = 0; k < numAssignKnobs; ++k)
+		{
             xml->setAttribute ("assignMidiCC_" + juce::String (k + 1),
                                assignKnobMidiCC[static_cast<size_t> (k)].load (std::memory_order_acquire));
-
+							   
+			xml->setAttribute ("assignMidiMode_" + juce::String (k + 1),
+								assignKnobCCMode[static_cast<size_t> (k)].load (std::memory_order_acquire));
+		}
         copyXmlToBinary (*xml, destData);
     }
 }
@@ -1754,6 +1791,8 @@ void NeomorphX1AudioProcessor::setStateInformation (const void* data, int sizeIn
         {
             const int savedCC = xmlState->getIntAttribute ("assignMidiCC_" + juce::String (k + 1), -1);
             assignKnobMidiCC[static_cast<size_t> (k)].store (savedCC, std::memory_order_release);
+			const int savedMode = xmlState->getIntAttribute ("assignMidiMode_" + juce::String (k + 1), 0);
+			assignKnobCCMode[static_cast<size_t> (k)].store (juce::jlimit (0, 2, savedMode), std::memory_order_release);
         }
 
         apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
@@ -1786,6 +1825,7 @@ bool NeomorphX1AudioProcessor::saveMidiMappingToFile (const juce::File& file) co
         auto* slotElem = xml->createNewChildElement ("AssignSlot");
         slotElem->setAttribute ("index", k + 1);
         slotElem->setAttribute ("cc", assignKnobMidiCC[static_cast<size_t> (k)].load (std::memory_order_acquire));
+		slotElem->setAttribute ("mode", assignKnobCCMode[static_cast<size_t> (k)].load (std::memory_order_acquire));
     }
 
     return xml->writeTo (file);
@@ -1807,8 +1847,13 @@ bool NeomorphX1AudioProcessor::loadMidiMappingFromFile (const juce::File& file)
     {
         const int slotIdx = child->getIntAttribute ("index", 0) - 1;
         const int ccNum   = child->getIntAttribute ("cc", -1);
+		const int ccMode = child->getIntAttribute ("mode", 0);
         if (slotIdx >= 0 && slotIdx < numAssignKnobs && ccNum >= 0 && ccNum <= 127)
-            assignKnobMidiCC[static_cast<size_t> (slotIdx)].store (ccNum, std::memory_order_release);
+		{
+			assignKnobMidiCC[static_cast<size_t> (slotIdx)].store (ccNum, std::memory_order_release);
+			const int ccMode = child->getIntAttribute ("mode", 0);
+			assignKnobCCMode[static_cast<size_t> (slotIdx)].store (juce::jlimit (0, 2, ccMode), std::memory_order_release);
+		}
     }
 
     return true;
