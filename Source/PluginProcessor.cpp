@@ -103,6 +103,41 @@ namespace
                 sample = s1 * (1.0f - pos * 0.45f) + (s2 + s3) * (pos * 0.34f);
                 break;
             }
+            case 5:
+            {
+                sample = 0.6f * std::sin (t * juce::MathConstants<float>::twoPi)
+                       + 0.4f * std::cos (t * juce::MathConstants<float>::twoPi * (2.0f + pos * 5.0f));
+                break;
+            }
+            case 6: // FM Bell / Metallic (pos steuert Modulationstiefe)
+            {
+                const float modIndex = pos * 5.0f;
+                const float modulator = std::sin (t * juce::MathConstants<float>::twoPi * 3.5f);
+                sample = std::sin (t * juce::MathConstants<float>::twoPi + modIndex * modulator);
+            break;
+            }
+            case 7: // Sub + Harmonics (pos blendet Obertöne zum Sub-Sinus)
+            {
+                const float sub  = std::sin (t * juce::MathConstants<float>::twoPi);
+                const float odd3 = std::sin (t * juce::MathConstants<float>::twoPi * 3.0f) * 0.5f;
+                const float odd5 = std::sin (t * juce::MathConstants<float>::twoPi * 5.0f) * 0.35f;
+                sample = juce::jlimit (-1.0f, 1.0f, sub + pos * (odd3 + odd5));
+            break;
+            }
+            case 8: // Bitcrush / LoFi (pos reduziert Auflösung von glatt bis 3-Bit-Stufen)
+            {
+                const float raw   = std::sin (t * juce::MathConstants<float>::twoPi);
+                const float steps = juce::jmap (pos, 64.0f, 4.0f);
+                sample = std::round (raw * steps) / steps;
+            break;
+            }
+            case 9: // Hard Sync Lead (pos verschiebt Slave-Frequenz 1x .. 6x)
+            {
+                const float syncRatio = 1.0f + pos * 5.0f;
+                const float slaveT    = std::fmod (t * syncRatio, 1.0f);
+                sample = 2.0f * slaveT - 1.0f;
+            break;
+            }
             default:
             {
                 sample = 0.6f * std::sin (t * juce::MathConstants<float>::twoPi)
@@ -503,6 +538,8 @@ namespace
                     float oscMorph  = 0.0f;
                     float osc1Lvl   = 0.0f;
                     float osc2Lvl   = 0.0f;
+                    float osc1Pan   = 0.0f;
+                    float osc2Pan   = 0.0f;
                 };
                 std::array<SceneModAccum, 2> matMod {};
 
@@ -554,6 +591,10 @@ namespace
                             case 9:  acc.osc1Lvl   += modVal;         break;
                             case 10: acc.osc2Lvl   += modVal;         break;
                             case 11: morphModOffset += modVal * 0.5f; break;
+                            case 14: acc.osc1Pan += modVal; break;
+                            case 15: acc.osc2Pan += modVal; break;
+                            case 16: acc.osc1Pan += modVal;
+                                     acc.osc2Pan += modVal; break;
                             default: break;
                         }
                     }
@@ -601,7 +642,8 @@ namespace
 
                         const float pos  = juce::jlimit (0.0f, 1.0f, oscP.position->load() + fegPosMod + seqPosMod + slotPosMod);
                         const float mrph = juce::jlimit (0.0f, 1.0f, oscP.morph->load() + fegMorphMod + acc.oscMorph);
-                        const float pan  = oscP.pan->load();
+                        const float slotPanMod = (o == 0) ? acc.osc1Pan : acc.osc2Pan;
+                        const float pan        = juce::jlimit (-1.0f, 1.0f, oscP.pan->load() + slotPanMod);
                         const float lvl  = juce::jlimit (0.0f, 1.25f, oscP.level->load() + slotLvlMod);
 
                         const float notePitch = static_cast<float> (currentMidiNote)
@@ -943,7 +985,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f));
 
     const juce::StringArray waveforms = {
-        "Basic Analog", "PWM / Pulse", "Formant", "Digital Fold", "SuperSaw", "Vocal Morph"
+        "Basic Analog", "PWM / Pulse", "Formant", "Digital Fold", "SuperSaw", "Vocal Morph",
+        "FM Bell / Metallic", "Sub + Harmonics", "Bitcrush / LoFi", "Sync Lead" // <-- Neu
     };
 
     for (int scene = 1; scene <= 2; ++scene)
@@ -1229,7 +1272,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout NeomorphX1AudioProcessor::cr
             "Osc 1 Pitch", "Osc 2 Pitch", "Osc 1+2 Pitch",
             "Osc 1 Position", "Osc 2 Position", "Osc 1+2 Morph",
             "Osc 1 Level", "Osc 2 Level",
-            "Scene Morph", "LFO 1 Rate", "LFO 1 Depth"
+            "Scene Morph", "LFO 1 Rate", "LFO 1 Depth",
+            "Osc 1 Pan", "Osc 2 Pan", "Osc 1+2 Pan" // <-- Indizes 14, 15, 16
         };
 
         for (int m = 0; m < 4; ++m)
@@ -1847,7 +1891,7 @@ bool NeomorphX1AudioProcessor::loadMidiMappingFromFile (const juce::File& file)
     {
         const int slotIdx = child->getIntAttribute ("index", 0) - 1;
         const int ccNum   = child->getIntAttribute ("cc", -1);
-		const int ccMode = child->getIntAttribute ("mode", 0);
+
         if (slotIdx >= 0 && slotIdx < numAssignKnobs && ccNum >= 0 && ccNum <= 127)
 		{
 			assignKnobMidiCC[static_cast<size_t> (slotIdx)].store (ccNum, std::memory_order_release);

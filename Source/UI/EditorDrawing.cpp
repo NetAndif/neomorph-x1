@@ -378,7 +378,7 @@ void NeomorphX1AudioProcessorEditor::drawBottomStatusStrip (juce::Graphics& g, j
 void NeomorphX1AudioProcessorEditor::drawSceneLeds (juce::Graphics& g, float w, float h)
 {
     constexpr float ledX[4] = { 0.4976f, 0.5369f, 0.5762f, 0.6173f };
-    const float ledY        = 0.6180f * h;
+    const float ledY        = 0.6160f * h;
     const float ledRadius   = 0.0042f * w;
 
     const bool ledActive[4] = {
@@ -508,6 +508,41 @@ void NeomorphX1AudioProcessorEditor::drawOscillatorSection (juce::Graphics& g,
                 const float s3 = 2.0f * std::fmod (t * 0.97f + 0.41f, 1.0f) - 1.0f;
                 sample = s1 * (1.0f - pos * 0.45f) + (s2 + s3) * (pos * 0.32f);
                 break;
+            }
+            case 5:
+            {
+                sample = 0.6f * std::sin (t * juce::MathConstants<float>::twoPi)
+                       + 0.4f * std::cos (t * juce::MathConstants<float>::twoPi * (2.0f + pos * 5.0f));
+                break;
+            }
+            case 6: // FM Bell / Metallic (pos steuert Modulationstiefe)
+            {
+                const float modIndex = pos * 5.0f;
+                const float modulator = std::sin (t * juce::MathConstants<float>::twoPi * 3.5f);
+                sample = std::sin (t * juce::MathConstants<float>::twoPi + modIndex * modulator);
+            break;
+            }
+            case 7: // Sub + Harmonics (pos blendet Obertöne zum Sub-Sinus)
+            {
+                const float sub  = std::sin (t * juce::MathConstants<float>::twoPi);
+                const float odd3 = std::sin (t * juce::MathConstants<float>::twoPi * 3.0f) * 0.5f;
+                const float odd5 = std::sin (t * juce::MathConstants<float>::twoPi * 5.0f) * 0.35f;
+                sample = juce::jlimit (-1.0f, 1.0f, sub + pos * (odd3 + odd5));
+            break;
+            }
+            case 8: // Bitcrush / LoFi (pos reduziert Auflösung von glatt bis 3-Bit-Stufen)
+            {
+                const float raw   = std::sin (t * juce::MathConstants<float>::twoPi);
+                const float steps = juce::jmap (pos, 64.0f, 4.0f);
+                sample = std::round (raw * steps) / steps;
+            break;
+            }
+            case 9: // Hard Sync Lead (pos verschiebt Slave-Frequenz 1x .. 6x)
+            {
+                const float syncRatio = 1.0f + pos * 5.0f;
+                const float slaveT    = std::fmod (t * syncRatio, 1.0f);
+                sample = 2.0f * slaveT - 1.0f;
+            break;
             }
             default:
             {

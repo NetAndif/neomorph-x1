@@ -8,7 +8,8 @@ void NeomorphX1AudioProcessorEditor::initTabControls()
 
     // --- Tab 1: Oscillators Controls ---
     const juce::StringArray waveformItems = {
-        "Basic Analog", "PWM / Pulse", "Formant", "Digital Fold", "SuperSaw", "Vocal Morph"
+        "Basic Analog", "PWM / Pulse", "Formant", "Digital Fold", "SuperSaw", "Vocal Morph",
+        "FM Bell / Metallic", "Sub + Harmonics", "Bitcrush / LoFi", "Sync Lead"
     };
 
     for (size_t i = 0; i < oscControls.size(); ++i)
@@ -442,7 +443,8 @@ void NeomorphX1AudioProcessorEditor::initTabControls()
         "Osc 1 Pitch", "Osc 2 Pitch", "Osc 1+2 Pitch",
         "Osc 1 Position", "Osc 2 Position", "Osc 1+2 Morph",
         "Osc 1 Level", "Osc 2 Level",
-        "Scene Morph", "LFO 1 Rate", "LFO 1 Depth"
+        "Scene Morph", "LFO 1 Rate", "LFO 1 Depth",
+            "Osc 1 Pan", "Osc 2 Pan", "Osc 1+2 Pan" // <-- Indizes 14, 15, 16
     };
 
     for (size_t m = 0; m < 4; ++m)
