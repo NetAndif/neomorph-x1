@@ -58,7 +58,7 @@ void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rec
     {
         case LcdPage::Patch:
         {
-            auto mainSceneRect = screen.removeFromTop (screen.getHeight() * 0.62f);
+            auto mainSceneRect = screen.removeFromTop (screen.getHeight() * 0.56f);
 
             g.setColour (sceneAccent.withAlpha (0.22f));
             g.setFont (juce::FontOptions (28.0f, juce::Font::bold));
@@ -70,9 +70,20 @@ void NeomorphX1AudioProcessorEditor::drawLcdScreen (juce::Graphics& g, juce::Rec
 
             const auto& osc1Wave = oscControls[0].waveBox.getText();
             const auto& osc2Wave = oscControls[1].waveBox.getText();
+            auto waveRow = screen.removeFromTop (screen.getHeight() * 0.55f);
             g.setColour (juce::Colour::fromRGB (160, 200, 225));
-            g.setFont (juce::FontOptions (12.5f, juce::Font::plain));
-            g.drawText (osc1Wave + "  +  " + osc2Wave, screen, juce::Justification::centred);
+            g.setFont (juce::FontOptions (12.0f, juce::Font::plain));
+            g.drawText (osc1Wave + "  +  " + osc2Wave, waveRow, juce::Justification::centred);
+
+            const auto cat = audioProcessor.getCurrentPresetCategory();
+            const auto aut = audioProcessor.getCurrentPresetAuthor();
+            juce::String metaLine = cat.isNotEmpty() ? ("[" + cat.toUpperCase() + "]") : "[INIT]";
+            if (aut.isNotEmpty())
+                metaLine += " // " + aut.toUpperCase();
+
+            g.setColour (juce::Colour::fromRGB (115, 160, 190));
+            g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+            g.drawText (metaLine, screen, juce::Justification::centred, true);
             break;
         }
 

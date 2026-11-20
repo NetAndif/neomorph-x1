@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "BinaryData.h"
 #include <cmath>
 
 namespace
@@ -832,6 +833,8 @@ NeomorphX1AudioProcessor::NeomorphX1AudioProcessor()
         synth.addVoice (new NeomorphVoice (paramCache));
 
     ensureDefaultPresetExists();
+    migrateLegacyRootPresets();
+    installFactoryPresets (false);
 }
 
 NeomorphX1AudioProcessor::~NeomorphX1AudioProcessor()
@@ -1318,6 +1321,9 @@ juce::File NeomorphX1AudioProcessor::getPresetDirectory() const
 
 void NeomorphX1AudioProcessor::ensureDefaultPresetExists()
 {
+    getFactoryPresetDirectory().createDirectory();
+    getUserPresetDirectory().createDirectory();
+
     const auto initFile = getPresetDirectory().getChildFile ("Init.xml");
     if (! initFile.existsAsFile())
     {
@@ -1326,34 +1332,177 @@ void NeomorphX1AudioProcessor::ensureDefaultPresetExists()
         if (xml != nullptr)
         {
             xml->setAttribute ("presetName", "Init");
+            xml->setAttribute ("presetCategory", "");
             xml->writeTo (initFile);
         }
     }
 }
 
+void NeomorphX1AudioProcessor::migrateLegacyRootPresets()
+{
+    const auto rootDir = getPresetDirectory();
+    const auto userDir = getUserPresetDirectory();
+    userDir.createDirectory();
+
+    const auto rootFiles = rootDir.findChildFiles (juce::File::findFiles, false, "*.xml");
+    for (const auto& f : rootFiles)
+    {
+        if (f.getFileNameWithoutExtension().equalsIgnoreCase ("Init"))
+            continue;
+
+        auto dest = userDir.getChildFile (f.getFileName());
+        if (! dest.existsAsFile())
+            f.moveFileTo (dest);
+    }
+}
+
+void NeomorphX1AudioProcessor::installFactoryPresets (bool overwriteExisting)
+{
+   #if JucePlugin_Build_Standalone || JucePlugin_Build_VST3 || JucePlugin_Build_AU
+    const auto factoryRoot = getFactoryPresetDirectory();
+    factoryRoot.createDirectory();
+
+    for (int i = 0; i < BinaryData::namedResourceListSize; ++i)
+    {
+        const juce::String origName (BinaryData::originalFilenames[i]);
+        if (! origName.endsWithIgnoreCase (".xml"))
+            continue;
+
+        int dataSize = 0;
+        const char* rawData = BinaryData::getNamedResource (BinaryData::namedResourceList[i], dataSize);
+        if (rawData == nullptr || dataSize <= 0)
+            continue;
+
+        const auto xmlString = juce::String::fromUTF8 (rawData, dataSize);
+        std::unique_ptr<juce::XmlElement> xml (juce::XmlDocument::parse (xmlString));
+        if (xml == nullptr || ! xml->hasTagName (apvts.state.getType()))
+            continue;
+
+        auto category = xml->getStringAttribute ("presetCategory", "Factory/Uncategorized").trim();
+        if (category.startsWithIgnoreCase ("Factory/"))
+            category = category.substring (8);
+        else if (category.equalsIgnoreCase ("Factory"))
+            category = "Uncategorized";
+
+        const auto presetName = xml->getStringAttribute ("presetName",
+                                                           juce::File::createFileWithoutCheckingPath (origName).getFileNameWithoutExtension());
+
+        auto targetDir = factoryRoot;
+        for (const auto& part : juce::StringArray::fromTokens (category, "/\\", ""))
+            if (part.isNotEmpty())
+                targetDir = targetDir.getChildFile (juce::File::createLegalFileName (part));
+
+        targetDir.createDirectory();
+        const auto targetFile = targetDir.getChildFile (juce::File::createLegalFileName (presetName) + ".xml");
+
+        if (overwriteExisting || ! targetFile.existsAsFile())
+        {
+            xml->setAttribute ("presetName", presetName);
+            xml->setAttribute ("presetCategory", "Factory/" + category);
+            if (! xml->hasAttribute ("presetAuthor"))
+                xml->setAttribute ("presetAuthor", "NetAndif");
+            xml->writeTo (targetFile);
+        }
+    }
+   #else
+    juce::ignoreUnused (overwriteExisting);
+   #endif
+}
+
+juce::Array<NeomorphX1AudioProcessor::PresetEntry> NeomorphX1AudioProcessor::getAllPresetEntries() const
+{
+    juce::Array<PresetEntry> entries;
+    const auto rootDir = getPresetDirectory();
+
+    // 1. Init immer ganz oben
+    PresetEntry initEntry;
+    initEntry.name      = "Init";
+    initEntry.category  = "";
+    initEntry.author    = "Factory";
+    initEntry.notes     = "Clean default starting patch.";
+    initEntry.file      = rootDir.getChildFile ("Init.xml");
+    initEntry.isFactory = true;
+    initEntry.isInit    = true;
+    entries.add (initEntry);
+
+    auto scanFolder = [&entries, &rootDir] (const juce::File& baseFolder, bool isFactoryFolder)
+    {
+        if (! baseFolder.isDirectory())
+            return;
+
+        auto files = baseFolder.findChildFiles (juce::File::findFiles, true, "*.xml");
+        files.sort();
+
+        for (const auto& f : files)
+        {
+            PresetEntry entry;
+            entry.file      = f;
+            entry.isFactory = isFactoryFolder;
+            entry.isInit    = false;
+
+            const auto relPath = f.getParentDirectory().getRelativePathFrom (rootDir).replaceCharacter ('\\', '/');
+            entry.category = (relPath == ".") ? "" : relPath;
+            entry.name     = f.getFileNameWithoutExtension();
+
+            if (auto xml = juce::XmlDocument::parse (f))
+            {
+                entry.name   = xml->getStringAttribute ("presetName", entry.name);
+                entry.author = xml->getStringAttribute ("presetAuthor", isFactoryFolder ? "NetAndif" : "User");
+                entry.notes  = xml->getStringAttribute ("presetNotes", "");
+            }
+
+            entries.add (entry);
+        }
+    };
+
+    scanFolder (getFactoryPresetDirectory(), true);
+    scanFolder (getUserPresetDirectory(), false);
+
+    return entries;
+}
+
+juce::StringArray NeomorphX1AudioProcessor::getAvailableCategories() const
+{
+    juce::StringArray categories;
+    const auto rootDir = getPresetDirectory();
+
+    auto collectDirs = [&categories, &rootDir] (const juce::File& baseDir, const juce::String& defaultName)
+    {
+        if (! baseDir.isDirectory())
+            return;
+
+        categories.addIfNotAlreadyThere (defaultName);
+        auto subDirs = baseDir.findChildFiles (juce::File::findDirectories, true);
+        subDirs.sort();
+
+        for (const auto& d : subDirs)
+        {
+            const auto rel = d.getRelativePathFrom (rootDir).replaceCharacter ('\\', '/');
+            if (rel.isNotEmpty() && rel != ".")
+                categories.addIfNotAlreadyThere (rel);
+        }
+    };
+
+    collectDirs (getFactoryPresetDirectory(), "Factory");
+    collectDirs (getUserPresetDirectory(), "User");
+    return categories;
+}
+
 juce::StringArray NeomorphX1AudioProcessor::getAvailablePresets() const
 {
     juce::StringArray names;
-    names.add ("Init");
-
-    const auto files = getPresetDirectory().findChildFiles (juce::File::findFiles, false, "*.xml");
-    juce::StringArray sorted;
-    for (const auto& f : files)
-    {
-        const auto name = f.getFileNameWithoutExtension();
-        if (! name.equalsIgnoreCase ("Init"))
-            sorted.add (name);
-    }
-
-    sorted.sort (true);
-    names.addArray (sorted);
+    for (const auto& entry : getAllPresetEntries())
+        names.add (entry.name);
     return names;
 }
 
-bool NeomorphX1AudioProcessor::savePreset (const juce::String& presetName)
+bool NeomorphX1AudioProcessor::savePreset (const juce::String& presetName,
+                                           const juce::String& category,
+                                           const juce::String& author,
+                                           const juce::String& notes)
 {
     const auto cleanName = juce::File::createLegalFileName (presetName.trim());
-    if (cleanName.isEmpty())
+    if (cleanName.isEmpty() || cleanName.equalsIgnoreCase ("Init"))
         return false;
 
     auto state = apvts.copyState();
@@ -1361,13 +1510,34 @@ bool NeomorphX1AudioProcessor::savePreset (const juce::String& presetName)
     if (xml == nullptr)
         return false;
 
-    xml->setAttribute ("presetName", cleanName);
+    // User-Presets landen immer unter User/...
+    auto cleanCat = category.trim().replaceCharacter ('\\', '/');
+    if (cleanCat.isEmpty() || cleanCat.startsWithIgnoreCase ("Factory"))
+        cleanCat = "User";
+    else if (! cleanCat.startsWithIgnoreCase ("User"))
+        cleanCat = "User/" + cleanCat;
 
-    const auto targetFile = getPresetDirectory().getChildFile (cleanName + ".xml");
+    auto targetDir = getPresetDirectory();
+    for (const auto& part : juce::StringArray::fromTokens (cleanCat, "/", ""))
+        if (part.isNotEmpty())
+            targetDir = targetDir.getChildFile (juce::File::createLegalFileName (part));
+
+    targetDir.createDirectory();
+    xml->setAttribute ("presetName", cleanName);
+    xml->setAttribute ("presetCategory", cleanCat);
+    if (author.isNotEmpty()) xml->setAttribute ("presetAuthor", author);
+    if (notes.isNotEmpty())  xml->setAttribute ("presetNotes", notes);
+
+    const auto targetFile = targetDir.getChildFile (cleanName + ".xml");
     if (xml->writeTo (targetFile))
     {
-        currentPresetName    = cleanName;
-        currentPresetIsSaved = ! cleanName.equalsIgnoreCase ("Init");
+        currentPresetName      = cleanName;
+        currentPresetCategory  = cleanCat;
+        currentPresetAuthor    = author;
+        currentPresetNotes     = notes;
+        currentPresetFile      = targetFile;
+        currentPresetIsSaved   = true;
+        currentPresetIsFactory = false;
         return true;
     }
 
@@ -1378,29 +1548,22 @@ bool NeomorphX1AudioProcessor::loadPresetByName (const juce::String& presetName)
 {
     if (presetName.equalsIgnoreCase ("Init"))
     {
-        const auto initFile = getPresetDirectory().getChildFile ("Init.xml");
-        if (initFile.existsAsFile())
-        {
-            std::unique_ptr<juce::XmlElement> xml (juce::XmlDocument::parse (initFile));
-            if (xml != nullptr && xml->hasTagName (apvts.state.getType()))
-            {
-                apvts.replaceState (juce::ValueTree::fromXml (*xml));
-                currentPresetName    = "Init";
-                currentPresetIsSaved = false;
-                panicReset();
-                return true;
-            }
-        }
-
         loadInitPatch();
         return true;
     }
 
-    const auto file = getPresetDirectory().getChildFile (presetName + ".xml");
-    return loadPresetFromFile (file, false);
+    for (const auto& entry : getAllPresetEntries())
+    {
+        if (entry.name.equalsIgnoreCase (presetName) && entry.file.existsAsFile())
+            return loadPresetFromFile (entry.file, false);
+    }
+
+    return false;
 }
 
-bool NeomorphX1AudioProcessor::loadPresetFromFile (const juce::File& file, bool importToLibrary)
+bool NeomorphX1AudioProcessor::loadPresetFromFile (const juce::File& file,
+                                                   bool importToLibrary,
+                                                   const juce::String& targetCategory)
 {
     if (! file.existsAsFile())
         return false;
@@ -1412,18 +1575,200 @@ bool NeomorphX1AudioProcessor::loadPresetFromFile (const juce::File& file, bool 
     const auto loadedName = xml->getStringAttribute ("presetName", file.getFileNameWithoutExtension());
     apvts.replaceState (juce::ValueTree::fromXml (*xml));
 
-    currentPresetName    = loadedName;
-    currentPresetIsSaved = ! loadedName.equalsIgnoreCase ("Init");
+    const auto rootDir     = getPresetDirectory();
+    const auto factoryRoot = getFactoryPresetDirectory();
+    const bool isInFactory = file.isAChildOf (factoryRoot);
+    const bool isInLibrary = file.isAChildOf (rootDir);
 
-    if (importToLibrary && currentPresetIsSaved)
+    juce::String resolvedCategory;
+    if (isInLibrary)
     {
-        const auto destFile = getPresetDirectory().getChildFile (juce::File::createLegalFileName (loadedName) + ".xml");
-        xml->setAttribute ("presetName", loadedName);
-        xml->writeTo (destFile);
+        resolvedCategory = file.getParentDirectory().getRelativePathFrom (rootDir).replaceCharacter ('\\', '/');
+        if (resolvedCategory == ".")
+            resolvedCategory = "";
     }
-	resetAllPickupLocks();
+    else
+    {
+        resolvedCategory = targetCategory.isNotEmpty() ? targetCategory : "User";
+    }
+
+    currentPresetName      = loadedName;
+    currentPresetCategory  = resolvedCategory;
+    currentPresetFile      = file;
+    currentPresetIsFactory = isInFactory;
+    currentPresetIsSaved   = ! loadedName.equalsIgnoreCase ("Init") && ! isInFactory && isInLibrary;
+    currentPresetAuthor    = xml->getStringAttribute ("presetAuthor", isInFactory ? "NetAndif" : "");
+    currentPresetNotes     = xml->getStringAttribute ("presetNotes", "");
+
+    if (importToLibrary && ! loadedName.equalsIgnoreCase ("Init"))
+    {
+        auto destDir = rootDir;
+        for (const auto& part : juce::StringArray::fromTokens (resolvedCategory, "/\\", ""))
+            if (part.isNotEmpty())
+                destDir = destDir.getChildFile (juce::File::createLegalFileName (part));
+
+        destDir.createDirectory();
+        const auto destFile = destDir.getChildFile (juce::File::createLegalFileName (loadedName) + ".xml");
+        xml->setAttribute ("presetName", loadedName);
+        xml->setAttribute ("presetCategory", resolvedCategory);
+        xml->writeTo (destFile);
+
+        currentPresetFile      = destFile;
+        currentPresetIsSaved   = true;
+        currentPresetIsFactory = false;
+    }
+
+    resetAllPickupLocks();
     panicReset();
     return true;
+}
+
+bool NeomorphX1AudioProcessor::deleteUserPreset (const juce::File& file)
+{
+    if (! file.existsAsFile() || ! file.isAChildOf (getUserPresetDirectory()))
+        return false;
+
+    const bool wasCurrent = (currentPresetFile == file);
+    if (file.moveToTrash())
+    {
+        if (wasCurrent)
+            loadInitPatch();
+        return true;
+    }
+    return false;
+}
+
+bool NeomorphX1AudioProcessor::renameOrMoveUserPreset (const juce::File& file,
+                                                       const juce::String& newName,
+                                                       const juce::String& newCategory,
+                                                       const juce::String& newAuthor,
+                                                       const juce::String& newNotes)
+{
+    if (! file.existsAsFile() || ! file.isAChildOf (getUserPresetDirectory()))
+        return false;
+
+    const auto cleanName = juce::File::createLegalFileName (newName.trim());
+    if (cleanName.isEmpty() || cleanName.equalsIgnoreCase ("Init"))
+        return false;
+
+    std::unique_ptr<juce::XmlElement> xml (juce::XmlDocument::parse (file));
+    if (xml == nullptr)
+        return false;
+
+    auto cleanCat = newCategory.trim().replaceCharacter ('\\', '/');
+    if (cleanCat.isEmpty() || ! cleanCat.startsWithIgnoreCase ("User"))
+        cleanCat = "User";
+
+    auto destDir = getPresetDirectory();
+    for (const auto& part : juce::StringArray::fromTokens (cleanCat, "/", ""))
+        if (part.isNotEmpty())
+            destDir = destDir.getChildFile (juce::File::createLegalFileName (part));
+
+    destDir.createDirectory();
+    const auto destFile = destDir.getChildFile (cleanName + ".xml");
+
+    xml->setAttribute ("presetName", cleanName);
+    xml->setAttribute ("presetCategory", cleanCat);
+    xml->setAttribute ("presetAuthor", newAuthor);
+    xml->setAttribute ("presetNotes", newNotes);
+
+    if (! xml->writeTo (destFile))
+        return false;
+
+    if (destFile != file)
+        file.deleteFile();
+
+    if (currentPresetFile == file)
+    {
+        currentPresetName     = cleanName;
+        currentPresetCategory = cleanCat;
+        currentPresetFile     = destFile;
+    }
+
+    return true;
+}
+
+bool NeomorphX1AudioProcessor::createUserCategory (const juce::String& categorySubPath)
+{
+    auto cleanCat = categorySubPath.trim().replaceCharacter ('\\', '/');
+    if (cleanCat.isEmpty())
+        return false;
+
+    if (! cleanCat.startsWithIgnoreCase ("User/"))
+        cleanCat = "User/" + cleanCat;
+
+    auto targetDir = getPresetDirectory();
+    for (const auto& part : juce::StringArray::fromTokens (cleanCat, "/", ""))
+        if (part.isNotEmpty())
+            targetDir = targetDir.getChildFile (juce::File::createLegalFileName (part));
+
+    return targetDir.createDirectory().wasOk();
+}
+
+bool NeomorphX1AudioProcessor::loadPresetEntry (const PresetEntry& entry)
+{
+    if (entry.isInit || (entry.name.equalsIgnoreCase ("Init") && entry.category.isEmpty()))
+    {
+        loadInitPatch();
+        return true;
+    }
+
+    if (entry.file.existsAsFile())
+        return loadPresetFromFile (entry.file, false, entry.category);
+
+    return loadPresetByName (entry.name);
+}
+
+juce::StringArray NeomorphX1AudioProcessor::getPresetCategories() const
+{
+    return getAvailableCategories();
+}
+
+bool NeomorphX1AudioProcessor::renameOrMoveCurrentUserPreset (const juce::String& newName,
+                                                              const juce::String& newCategory)
+{
+    if (! currentPresetIsSaved || currentPresetIsFactory || ! currentPresetFile.existsAsFile())
+        return false;
+
+    const auto oldParent = currentPresetFile.getParentDirectory();
+    const bool ok = renameOrMoveUserPreset (currentPresetFile,
+                                            newName,
+                                            newCategory,
+                                            currentPresetAuthor,
+                                            currentPresetNotes);
+
+    // Leeren User-Unterordner aufräumen, falls verschoben wurde
+    if (ok && oldParent != getUserPresetDirectory()
+           && oldParent != getPresetDirectory()
+           && oldParent.getNumberOfChildFiles (juce::File::findFilesAndDirectories) == 0)
+    {
+        oldParent.deleteFile();
+    }
+
+    return ok;
+}
+
+bool NeomorphX1AudioProcessor::deleteCurrentUserPreset()
+{
+    if (! currentPresetIsSaved || currentPresetIsFactory || ! currentPresetFile.existsAsFile())
+        return false;
+
+    const auto oldParent = currentPresetFile.getParentDirectory();
+    const bool ok = deleteUserPreset (currentPresetFile);
+
+    if (ok && oldParent != getUserPresetDirectory()
+           && oldParent != getPresetDirectory()
+           && oldParent.getNumberOfChildFiles (juce::File::findFilesAndDirectories) == 0)
+    {
+        oldParent.deleteFile();
+    }
+
+    return ok;
+}
+
+void NeomorphX1AudioProcessor::restoreFactoryPresets()
+{
+    installFactoryPresets (true);
 }
 
 void NeomorphX1AudioProcessor::loadInitPatch()
@@ -1431,9 +1776,14 @@ void NeomorphX1AudioProcessor::loadInitPatch()
     for (auto* param : getParameters())
         param->setValueNotifyingHost (param->getDefaultValue());
 
-    currentPresetName    = "Init";
-    currentPresetIsSaved = false;
-	resetAllPickupLocks();
+    currentPresetName      = "Init";
+    currentPresetCategory  = "";
+    currentPresetFile      = getPresetDirectory().getChildFile ("Init.xml");
+    currentPresetIsSaved   = false;
+    currentPresetIsFactory = true;
+    currentPresetAuthor.clear();
+    currentPresetNotes.clear();
+    resetAllPickupLocks();
     panicReset();
 }
 
@@ -1807,7 +2157,11 @@ void NeomorphX1AudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     if (xml != nullptr)
     {
         xml->setAttribute ("presetName", currentPresetName);
+        xml->setAttribute ("presetCategory", currentPresetCategory);
+        xml->setAttribute ("presetAuthor", currentPresetAuthor);
+        xml->setAttribute ("presetNotes", currentPresetNotes);
         xml->setAttribute ("presetIsSaved", currentPresetIsSaved);
+        xml->setAttribute ("presetIsFactory", currentPresetIsFactory);
         xml->setAttribute ("midiPickupEnabled", isMidiPickupEnabled());
 
         for (int k = 0; k < numAssignKnobs; ++k)
@@ -1827,8 +2181,12 @@ void NeomorphX1AudioProcessor::setStateInformation (const void* data, int sizeIn
     std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes));
     if (xmlState != nullptr && xmlState->hasTagName (apvts.state.getType()))
     {
-        currentPresetName    = xmlState->getStringAttribute ("presetName", "Init");
-        currentPresetIsSaved = xmlState->getBoolAttribute ("presetIsSaved", ! currentPresetName.equalsIgnoreCase ("Init"));
+        currentPresetName      = xmlState->getStringAttribute ("presetName", "Init");
+        currentPresetCategory  = xmlState->getStringAttribute ("presetCategory", "");
+        currentPresetAuthor    = xmlState->getStringAttribute ("presetAuthor", "");
+        currentPresetNotes     = xmlState->getStringAttribute ("presetNotes", "");
+        currentPresetIsSaved   = xmlState->getBoolAttribute ("presetIsSaved", ! currentPresetName.equalsIgnoreCase ("Init"));
+        currentPresetIsFactory = xmlState->getBoolAttribute ("presetIsFactory", false);
         setMidiPickupEnabled (xmlState->getBoolAttribute ("midiPickupEnabled", true));
 
         for (int k = 0; k < numAssignKnobs; ++k)

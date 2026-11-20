@@ -19,21 +19,80 @@ NeomorphX1AudioProcessorEditor::NeomorphX1AudioProcessorEditor (NeomorphX1AudioP
 
     // --- Top-Bar Preset-Verwaltung ---
     presetBox.setJustificationType (juce::Justification::centred);
-    presetBox.setTooltip ("Select Preset");
+    presetBox.setTooltip ("Select Preset (Grouped by Factory / User Category)");
     presetBox.onChange = [this]
     {
         if (suppressPresetBoxCallback)
             return;
 
-        const auto selectedName = presetBox.getText();
-        if (selectedName.isNotEmpty() && audioProcessor.loadPresetByName (selectedName))
+        const int selectedId = presetBox.getSelectedId();
+        const int entryIndex = selectedId - 1;
+
+        if (juce::isPositiveAndBelow (entryIndex, cachedPresetEntries.size()))
         {
-            freeEgControls.canvas.repaint();
-            stepSeqControls.canvas.repaint();
-            triggerLcdNotification ("PRESET LOADED", selectedName);
+            const auto& entry = cachedPresetEntries.getReference (entryIndex);
+            if (audioProcessor.loadPresetEntry (entry))
+            {
+                freeEgControls.canvas.repaint();
+                stepSeqControls.canvas.repaint();
+                triggerLcdNotification (entry.category.toUpperCase(), entry.name);
+            }
+        }
+        else
+        {
+            const auto selectedName = presetBox.getText();
+            if (selectedName.isNotEmpty() && audioProcessor.loadPresetByName (selectedName))
+            {
+                freeEgControls.canvas.repaint();
+                stepSeqControls.canvas.repaint();
+                triggerLcdNotification ("PRESET LOADED", selectedName);
+            }
         }
     };
     addAndMakeVisible (presetBox);
+
+    savePresetButton.setAlpha (0.0f);
+    savePresetButton.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    savePresetButton.setTooltip ("Save Preset (Right-Click: Save As / Category...)");
+    savePresetButton.onClick = [this] { handleSavePresetClick (false); };
+    savePresetButton.onRightClick = [this] { handleSavePresetClick (true); };
+    addAndMakeVisible (savePresetButton);
+
+    loadPresetButton.setAlpha (0.0f);
+    loadPresetButton.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    loadPresetButton.setTooltip ("Import External Preset (.xml) (Right-Click: Preset Manager)");
+    loadPresetButton.onClick = [this] { handleLoadPresetClick(); };
+    loadPresetButton.onRightClick = [this]
+    {
+        juce::PopupMenu mgr;
+        mgr.addSectionHeader ("PRESET MANAGER");
+        mgr.addItem (1, "Import External Preset (.xml)...");
+        mgr.addSeparator();
+        mgr.addItem (2, "Save As / Set Category & Metadata...");
+        mgr.addItem (3, "Rename / Move Current User Preset...",
+                     audioProcessor.isCurrentPresetSaved() && ! audioProcessor.isCurrentPresetFactory());
+        mgr.addItem (4, "Delete Current User Preset...",
+                     audioProcessor.isCurrentPresetSaved() && ! audioProcessor.isCurrentPresetFactory());
+        mgr.addSeparator();
+        mgr.addItem (5, "Restore Factory Presets");
+        mgr.addItem (6, "Open Presets Folder...");
+
+        mgr.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&loadPresetButton),
+                           [this] (int res)
+        {
+            switch (res)
+            {
+                case 1: handleLoadPresetClick(); break;
+                case 2: handleSavePresetClick (true); break;
+                case 3: handleRenameOrMovePresetClick(); break;
+                case 4: handleDeletePresetClick(); break;
+                case 5: handleRestoreFactoryPresetsClick(); break;
+                case 6: audioProcessor.getPresetDirectory().revealToUser(); break;
+                default: break;
+            }
+        });
+    };
+    addAndMakeVisible (loadPresetButton);
 
     savePresetButton.setAlpha (0.0f);
     savePresetButton.setMouseCursor (juce::MouseCursor::PointingHandCursor);
@@ -574,50 +633,193 @@ bool NeomorphX1AudioProcessorEditor::keyPressed (const juce::KeyPress& key)
 }
 
 // ==============================================================================
-// Preset-Verwaltung UI-Logik
+// Preset-Verwaltung UI-Logik (Hierarchische Kategorien & Preset-Manager)
 // ==============================================================================
 void NeomorphX1AudioProcessorEditor::refreshPresetList()
 {
     suppressPresetBoxCallback = true;
 
     presetBox.clear (juce::dontSendNotification);
-    const auto presets = audioProcessor.getAvailablePresets();
-    const auto current = audioProcessor.getCurrentPresetName();
+    cachedPresetEntries = audioProcessor.getAllPresetEntries();
 
+    const auto currentName     = audioProcessor.getCurrentPresetName();
+    const auto currentCategory = audioProcessor.getCurrentPresetCategory();
+
+    auto* rootMenu = presetBox.getRootMenu();
+    rootMenu->clear();
+
+    // 1. "Init" ganz oben als direkter Schnellzugriff
     int matchId = 1;
-    for (int i = 0; i < presets.size(); ++i)
+    for (int i = 0; i < cachedPresetEntries.size(); ++i)
     {
-        presetBox.addItem (presets[i], i + 1);
-        if (presets[i].equalsIgnoreCase (current))
-            matchId = i + 1;
+        const auto& entry = cachedPresetEntries.getReference (i);
+        const int itemId  = i + 1;
+
+        if (entry.name.equalsIgnoreCase ("Init") && entry.category.isEmpty())
+        {
+            const bool isCurrent = currentName.equalsIgnoreCase ("Init");
+            if (isCurrent)
+                matchId = itemId;
+
+            rootMenu->addItem (itemId, "Init", true, isCurrent);
+            rootMenu->addSeparator();
+            break;
+        }
     }
+
+    // Hilfsfunktion: Baut aus einer Teilmenge von Entries einen Baum aus juce::PopupMenu-Untermenüs
+    struct MenuNode
+    {
+        juce::String label;
+        std::map<juce::String, std::unique_ptr<MenuNode>> children;
+        std::vector<int> entryIndices;
+    };
+
+    auto buildHierarchyMenu = [&] (const juce::String& rootFolderTitle, bool wantFactory)
+    {
+        MenuNode rootNode;
+        rootNode.label = rootFolderTitle;
+        int count = 0;
+
+        for (int i = 0; i < cachedPresetEntries.size(); ++i)
+        {
+            const auto& entry = cachedPresetEntries.getReference (i);
+            if (entry.name.equalsIgnoreCase ("Init") && entry.category.isEmpty())
+                continue;
+
+            if (entry.isFactory != wantFactory)
+                continue;
+
+            ++count;
+
+            // Kategorie-Pfad aufteilen (z.B. "Factory/Bass" -> ["Bass"] oder "User/Synthwave/Leads" -> ["Synthwave", "Leads"])
+            juce::String relCat = entry.category.replaceCharacter ('\\', '/');
+            if (relCat.startsWithIgnoreCase (rootFolderTitle + "/"))
+                relCat = relCat.substring (rootFolderTitle.length() + 1);
+            else if (relCat.equalsIgnoreCase (rootFolderTitle))
+                relCat.clear();
+
+            juce::StringArray parts;
+            if (relCat.isNotEmpty())
+                parts.addTokens (relCat, "/", "");
+            parts.removeEmptyStrings();
+
+            MenuNode* cursor = &rootNode;
+            for (const auto& part : parts)
+            {
+                auto& child = cursor->children[part];
+                if (child == nullptr)
+                {
+                    child = std::make_unique<MenuNode>();
+                    child->label = part;
+                }
+                cursor = child.get();
+            }
+
+            cursor->entryIndices.push_back (i);
+        }
+
+        if (count == 0)
+            return;
+
+        std::function<void (const MenuNode&, juce::PopupMenu&)> populateMenu =
+            [&] (const MenuNode& node, juce::PopupMenu& targetMenu)
+        {
+            // Zuerst Unterordner alphabetisch
+            for (const auto& kv : node.children)
+            {
+                juce::PopupMenu sub;
+                populateMenu (*kv.second, sub);
+                targetMenu.addSubMenu (kv.first, sub);
+            }
+
+            if (! node.children.empty() && ! node.entryIndices.empty())
+                targetMenu.addSeparator();
+
+            // Danach Presets in diesem Ordner
+            for (int idx : node.entryIndices)
+            {
+                const auto& entry = cachedPresetEntries.getReference (idx);
+                const int itemId  = idx + 1;
+                const bool isCurrent = entry.name.equalsIgnoreCase (currentName)
+                                    && (currentCategory.isEmpty() || entry.category.equalsIgnoreCase (currentCategory));
+                if (isCurrent)
+                    matchId = itemId;
+
+                targetMenu.addItem (itemId, entry.name, true, isCurrent);
+            }
+        };
+
+        juce::PopupMenu topSubMenu;
+        populateMenu (rootNode, topSubMenu);
+        rootMenu->addSubMenu (rootFolderTitle, topSubMenu);
+    };
+
+    buildHierarchyMenu ("Factory", true);
+    buildHierarchyMenu ("User",    false);
 
     presetBox.setSelectedId (matchId, juce::dontSendNotification);
     if (presetBox.getText().isEmpty())
-        presetBox.setText (current, juce::dontSendNotification);
+        presetBox.setText (currentName, juce::dontSendNotification);
 
     suppressPresetBoxCallback = false;
 }
 
 void NeomorphX1AudioProcessorEditor::handleSavePresetClick (bool forceSaveAsDialog)
 {
-    if (! forceSaveAsDialog && audioProcessor.isCurrentPresetSaved())
+    // Direktspeichern nur für bereits existierende User-Presets (Factory-Presets öffnen immer "Save As")
+    if (! forceSaveAsDialog && audioProcessor.isCurrentPresetSaved() && ! audioProcessor.isCurrentPresetFactory())
     {
         const auto name = audioProcessor.getCurrentPresetName();
-        if (audioProcessor.savePreset (name))
+        const auto cat  = audioProcessor.getCurrentPresetCategory();
+        if (audioProcessor.savePreset (name, cat))
             triggerLcdNotification ("PRESET SAVED", name);
         return;
     }
 
-    auto* alert = new juce::AlertWindow ("NEOMORPH X1 // SAVE PRESET",
-                                         "Enter a name for the new preset:",
+    auto* alert = new juce::AlertWindow ("NEOMORPH X1 // SAVE USER PRESET",
+                                         audioProcessor.isCurrentPresetFactory()
+                                             ? "Factory presets are read-only. Save a copy to your User library:"
+                                             : "Configure preset name, category folder, and metadata:",
                                          juce::MessageBoxIconType::NoIcon);
 
     const auto suggestedName = audioProcessor.isCurrentPresetSaved()
-                                   ? (audioProcessor.getCurrentPresetName() + " Copy")
+                                   ? (audioProcessor.getCurrentPresetName() + (audioProcessor.isCurrentPresetFactory() ? " (User)" : " Copy"))
                                    : "Neomorph Patch 01";
 
     alert->addTextEditor ("presetName", suggestedName, "Preset Name:");
+
+    // Kategorie-Auswahl + freie Unterordner-Eingabe
+    juce::StringArray categorySuggestions = {
+        "User",
+        "User/Bass",
+        "User/Leads",
+        "User/Pads",
+        "User/Keys",
+        "User/Plucks",
+        "User/Arp & Seq",
+        "User/FX & Drones"
+    };
+    for (const auto& existingCat : audioProcessor.getPresetCategories())
+    {
+        if (! existingCat.startsWithIgnoreCase ("Factory") && ! categorySuggestions.contains (existingCat, true))
+            categorySuggestions.add (existingCat);
+    }
+
+    juce::String defaultCat = audioProcessor.getCurrentPresetCategory();
+    if (defaultCat.isEmpty() || defaultCat.startsWithIgnoreCase ("Factory"))
+        defaultCat = "User";
+
+    alert->addComboBox ("categoryBox", categorySuggestions, "Category Preset:");
+    if (auto* cb = alert->getComboBoxComponent ("categoryBox"))
+    {
+        cb->setEditableText (true);
+        cb->setText (defaultCat, juce::dontSendNotification);
+    }
+
+    alert->addTextEditor ("authorName", audioProcessor.getCurrentPresetAuthor(), "Author (optional):");
+    alert->addTextEditor ("notesText",  audioProcessor.getCurrentPresetNotes(),  "Notes (optional):");
+
     alert->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
     alert->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
 
@@ -627,12 +829,23 @@ void NeomorphX1AudioProcessorEditor::handleSavePresetClick (bool forceSaveAsDial
             if (result == 1)
             {
                 const auto newName = alert->getTextEditorContents ("presetName").trim();
+                juce::String category = "User";
+                if (auto* cb = alert->getComboBoxComponent ("categoryBox"))
+                    category = cb->getText().trim();
+
+                const auto author = alert->getTextEditorContents ("authorName").trim();
+                const auto notes  = alert->getTextEditorContents ("notesText").trim();
+
                 if (newName.isNotEmpty() && ! newName.equalsIgnoreCase ("Init"))
                 {
-                    if (audioProcessor.savePreset (newName))
+                    if (audioProcessor.savePreset (newName, category, author, notes))
                     {
                         refreshPresetList();
-                        triggerLcdNotification ("PRESET SAVED", newName);
+                        triggerLcdNotification ("SAVED [" + category.toUpperCase() + "]", newName);
+                    }
+                    else
+                    {
+                        triggerLcdNotification ("SAVE ERROR", "WRITE FAILED");
                     }
                 }
                 else if (newName.equalsIgnoreCase ("Init"))
@@ -646,7 +859,7 @@ void NeomorphX1AudioProcessorEditor::handleSavePresetClick (bool forceSaveAsDial
 void NeomorphX1AudioProcessorEditor::handleLoadPresetClick()
 {
     activeFileChooser = std::make_unique<juce::FileChooser> (
-        "Load Neomorph X1 Preset (.xml)",
+        "Import Neomorph X1 Preset (.xml)",
         audioProcessor.getPresetDirectory(),
         "*.xml");
 
@@ -659,9 +872,9 @@ void NeomorphX1AudioProcessorEditor::handleLoadPresetClick()
         if (! file.existsAsFile())
             return;
 
-        const bool isOutsideLibrary = (file.getParentDirectory() != audioProcessor.getPresetDirectory());
+        const bool isOutsideLibrary = ! file.isAChildOf (audioProcessor.getPresetDirectory());
 
-        if (audioProcessor.loadPresetFromFile (file, isOutsideLibrary))
+        if (audioProcessor.loadPresetFromFile (file, isOutsideLibrary, "User"))
         {
             refreshPresetList();
             freeEgControls.canvas.repaint();
@@ -676,6 +889,105 @@ void NeomorphX1AudioProcessorEditor::handleLoadPresetClick()
     });
 }
 
+void NeomorphX1AudioProcessorEditor::handleRenameOrMovePresetClick()
+{
+    if (! audioProcessor.isCurrentPresetSaved() || audioProcessor.isCurrentPresetFactory())
+    {
+        triggerLcdNotification ("PROTECTED", "FACTORY / INIT LOCKED");
+        return;
+    }
+
+    auto* alert = new juce::AlertWindow ("NEOMORPH X1 // RENAME OR MOVE PRESET",
+                                         "Edit preset name or target User category folder:",
+                                         juce::MessageBoxIconType::NoIcon);
+
+    alert->addTextEditor ("presetName", audioProcessor.getCurrentPresetName(), "New Preset Name:");
+
+    juce::StringArray categorySuggestions = {
+        "User", "User/Bass", "User/Leads", "User/Pads",
+        "User/Keys", "User/Plucks", "User/Arp & Seq", "User/FX & Drones"
+    };
+    for (const auto& existingCat : audioProcessor.getPresetCategories())
+    {
+        if (! existingCat.startsWithIgnoreCase ("Factory") && ! categorySuggestions.contains (existingCat, true))
+            categorySuggestions.add (existingCat);
+    }
+
+    alert->addComboBox ("categoryBox", categorySuggestions, "Target Category:");
+    if (auto* cb = alert->getComboBoxComponent ("categoryBox"))
+    {
+        cb->setEditableText (true);
+        cb->setText (audioProcessor.getCurrentPresetCategory(), juce::dontSendNotification);
+    }
+
+    alert->addButton ("Apply", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    alert->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+
+    alert->enterModalState (true,
+        juce::ModalCallbackFunction::create ([this, alert] (int result)
+        {
+            if (result == 1)
+            {
+                const auto newName = alert->getTextEditorContents ("presetName").trim();
+                juce::String newCat = "User";
+                if (auto* cb = alert->getComboBoxComponent ("categoryBox"))
+                    newCat = cb->getText().trim();
+
+                if (newName.isNotEmpty() && ! newName.equalsIgnoreCase ("Init"))
+                {
+                    if (audioProcessor.renameOrMoveCurrentUserPreset (newName, newCat))
+                    {
+                        refreshPresetList();
+                        triggerLcdNotification ("MOVED [" + newCat.toUpperCase() + "]", newName);
+                    }
+                    else
+                    {
+                        triggerLcdNotification ("MOVE ERROR", "OPERATION FAILED");
+                    }
+                }
+            }
+        }), true);
+}
+
+void NeomorphX1AudioProcessorEditor::handleDeletePresetClick()
+{
+    if (! audioProcessor.isCurrentPresetSaved() || audioProcessor.isCurrentPresetFactory())
+    {
+        triggerLcdNotification ("PROTECTED", "CANNOT DELETE FACTORY");
+        return;
+    }
+
+    const auto nameToDelete = audioProcessor.getCurrentPresetName();
+    auto* alert = new juce::AlertWindow ("NEOMORPH X1 // DELETE USER PRESET",
+                                         "Permanently delete \"" + nameToDelete + "\"?",
+                                         juce::MessageBoxIconType::WarningIcon);
+
+    alert->addButton ("Delete", 1);
+    alert->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+
+    alert->enterModalState (true,
+        juce::ModalCallbackFunction::create ([this, nameToDelete] (int result)
+        {
+            if (result == 1)
+            {
+                if (audioProcessor.deleteCurrentUserPreset())
+                {
+                    refreshPresetList();
+                    freeEgControls.canvas.repaint();
+                    stepSeqControls.canvas.repaint();
+                    triggerLcdNotification ("PRESET DELETED", nameToDelete);
+                }
+            }
+        }), true);
+}
+
+void NeomorphX1AudioProcessorEditor::handleRestoreFactoryPresetsClick()
+{
+    audioProcessor.restoreFactoryPresets();
+    refreshPresetList();
+    triggerLcdNotification ("FACTORY BANK", "PRESETS RESTORED");
+}
+
 void NeomorphX1AudioProcessorEditor::handlePanicClick()
 {
     audioProcessor.panicReset();
@@ -687,16 +999,16 @@ void NeomorphX1AudioProcessorEditor::handlePanicClick()
 
 void NeomorphX1AudioProcessorEditor::stepPreset (int delta)
 {
-    const int numItems = presetBox.getNumItems();
-    if (numItems <= 0)
+    const int total = cachedPresetEntries.size();
+    if (total <= 0)
         return;
 
-    int idx = presetBox.getSelectedItemIndex();
-    if (idx < 0)
-        idx = 0;
+    int currentIdx = presetBox.getSelectedId() - 1;
+    if (! juce::isPositiveAndBelow (currentIdx, total))
+        currentIdx = 0;
 
-    idx = (idx + delta + numItems) % numItems;
-    presetBox.setSelectedItemIndex (idx, juce::sendNotificationSync);
+    const int nextIdx = (currentIdx + delta + total) % total;
+    presetBox.setSelectedId (nextIdx + 1, juce::sendNotificationSync);
 }
 
 void NeomorphX1AudioProcessorEditor::timerCallback()
@@ -882,7 +1194,20 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
 
     menu.addSectionHeader ("NEOMORPH X1 // SYSTEM");
     menu.addItem (1, "Init Full Patch (Reset)");
-    menu.addItem (5, "Open Presets Folder...");
+
+    juce::PopupMenu presetLibMenu;
+    presetLibMenu.addItem (50, "Save Preset As / Set Category...");
+    presetLibMenu.addItem (51, "Import External Preset (.xml)...");
+    presetLibMenu.addSeparator();
+    presetLibMenu.addItem (52, "Rename / Move Current User Preset...",
+                           audioProcessor.isCurrentPresetSaved() && ! audioProcessor.isCurrentPresetFactory());
+    presetLibMenu.addItem (53, "Delete Current User Preset...",
+                           audioProcessor.isCurrentPresetSaved() && ! audioProcessor.isCurrentPresetFactory());
+    presetLibMenu.addSeparator();
+    presetLibMenu.addItem (54, "Restore Factory Presets");
+    presetLibMenu.addItem (5,  "Open Presets Folder...");
+    menu.addSubMenu ("Preset Library", presetLibMenu);
+
     menu.addSeparator();
     menu.addItem (2, "Copy Scene 1 -> Scene 2");
     menu.addItem (3, "Copy Scene 2 -> Scene 1");
@@ -995,6 +1320,11 @@ void NeomorphX1AudioProcessorEditor::showSettingsMenu()
                 triggerLcdNotification ("MIDI MAPPINGS", "ALL CLEARED");
                 repaint();
                 break;
+            case 50: handleSavePresetClick (true); break;
+            case 51: handleLoadPresetClick(); break;
+            case 52: handleRenameOrMovePresetClick(); break;
+            case 53: handleDeletePresetClick(); break;
+            case 54: handleRestoreFactoryPresetsClick(); break;
             default:
                 break;
         }

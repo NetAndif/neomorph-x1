@@ -147,6 +147,9 @@ private:
     void refreshPresetList();
     void handleSavePresetClick (bool forceSaveAsDialog);
     void handleLoadPresetClick();
+    void handleRenameOrMovePresetClick();
+    void handleDeletePresetClick();
+    void handleRestoreFactoryPresetsClick();
     void handlePanicClick();
     void stepPreset (int delta);
 
@@ -193,6 +196,7 @@ private:
     juce::TextButton nextPresetButton;
     std::unique_ptr<juce::FileChooser> activeFileChooser;
     bool suppressPresetBoxCallback = false;
+    juce::Array<NeomorphX1AudioProcessor::PresetEntry> cachedPresetEntries;
 
     // 10er-Nummernblock
     std::array<juce::TextButton, 12> keypadButtons;

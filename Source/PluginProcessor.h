@@ -164,18 +164,62 @@ public:
         }
     }
 
-    // Preset-Verwaltung & Engine-Panic
+// Preset-Verwaltung (Kategorien, Factory/User & Engine-Panic)
+    struct PresetEntry
+    {
+        juce::String name;          // Anzeigename (z.B. "Neon Sub Bass")
+        juce::String category;      // Relativer Pfad (z.B. "Factory/Bass" oder "User/Synthwave" oder "")
+        juce::String author;
+        juce::String notes;
+        juce::File file;
+        bool isFactory = false;
+        bool isInit    = false;
+    };
+
     juce::File getPresetDirectory() const;
+    juce::File getFactoryPresetDirectory() const { return getPresetDirectory().getChildFile ("Factory"); }
+    juce::File getUserPresetDirectory() const    { return getPresetDirectory().getChildFile ("User"); }
+
     void ensureDefaultPresetExists();
+    void installFactoryPresets (bool overwriteExisting = false);
+    void migrateLegacyRootPresets();
+
+    juce::Array<PresetEntry> getAllPresetEntries() const;
+    juce::StringArray getAvailableCategories() const;
     juce::StringArray getAvailablePresets() const;
-    bool savePreset (const juce::String& presetName);
+
+    bool savePreset (const juce::String& presetName,
+                     const juce::String& category = "User",
+                     const juce::String& author = {},
+                     const juce::String& notes = {});
     bool loadPresetByName (const juce::String& presetName);
-    bool loadPresetFromFile (const juce::File& file, bool importToLibrary);
+    bool loadPresetFromFile (const juce::File& file, bool importToLibrary, const juce::String& targetCategory = "User");
+    bool deleteUserPreset (const juce::File& file);
+    bool renameOrMoveUserPreset (const juce::File& file,
+                                 const juce::String& newName,
+                                 const juce::String& newCategory,
+                                 const juce::String& newAuthor,
+                                 const juce::String& newNotes);
+    bool createUserCategory (const juce::String& categorySubPath);
+
     void loadInitPatch();
     void panicReset();
 
-    juce::String getCurrentPresetName() const { return currentPresetName; }
-    bool isCurrentPresetSaved() const noexcept { return currentPresetIsSaved; }
+    juce::String getCurrentPresetName() const     { return currentPresetName; }
+    juce::String getCurrentPresetCategory() const { return currentPresetCategory; }
+    juce::File getCurrentPresetFile() const       { return currentPresetFile; }
+    bool isCurrentPresetSaved() const noexcept    { return currentPresetIsSaved; }
+    bool isCurrentPresetFactory() const noexcept  { return currentPresetIsFactory; }
+
+    bool loadPresetEntry (const PresetEntry& entry);
+    juce::StringArray getPresetCategories() const;
+
+    juce::String getCurrentPresetAuthor() const noexcept { return currentPresetAuthor; }
+    juce::String getCurrentPresetNotes() const noexcept  { return currentPresetNotes; }
+
+    bool renameOrMoveCurrentUserPreset (const juce::String& newName, const juce::String& newCategory);
+    bool deleteCurrentUserPreset();
+    void restoreFactoryPresets();
 
     struct OscParamPointers
     {
@@ -318,8 +362,13 @@ private:
     EngineParamCache paramCache;
     juce::Synthesiser synth;
 
-    juce::String currentPresetName { "Init" };
-    bool currentPresetIsSaved = false;
+    juce::String currentPresetName  { "Init" };
+    juce::String currentPresetCategory {};
+    juce::File   currentPresetFile     {};
+    bool currentPresetIsSaved   = false;
+    bool currentPresetIsFactory = false;
+    juce::String currentPresetAuthor {};
+    juce::String currentPresetNotes  {};
     std::atomic<bool> panicRequested { false };
 
     // Audio- & MIDI-Telemetrie
