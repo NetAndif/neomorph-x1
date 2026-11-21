@@ -45,3 +45,113 @@ Open Source Virtual Analog Synthesizer VST3/AU Plugin inspired by the Yamaha AN1
 * **Hierarchical Preset Library**: Organized into a read-only **Factory** bank and customizable **User** category subfolders with XML metadata (*Author*, *Notes*, *Category*), factory preset restoration, and quick prev/next patch stepping.
 * **Live Telemetry & LCD Display**: Real-time stereo oscilloscope, peak meters, active voice counter, MIDI activity monitor, and a built-in **Panic / Engine Reset** button.
 
+---
+
+## Building from Source
+
+Neomorph X1 uses **CMake** (3.22+) and automatically fetches **JUCE 8.0.4** via `FetchContent` during the initial configuration step.
+
+### Prerequisites (All Platforms)
+* **Git**
+* **CMake** `3.22` or newer
+* A C++20-compatible compiler (Apple Clang, GCC/Clang, or MSVC 2022)
+
+---
+
+### macOS (Apple Silicon & Intel)
+
+#### 1. Install Build Tools
+Install Xcode Command Line Tools and CMake (via [Homebrew](https://brew.sh/)):
+```bash
+xcode-select --install
+brew install cmake
+```
+
+#### 2. Configure & Build (Universal Binary)
+```bash
+git clone https://github.com/<your-username>/neomorph-x1.git
+cd neomorph-x1
+
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+cmake --build build --config Release -j
+```
+
+#### 3. Install Plugins & Standalone App
+The compiled artifacts are located in `build/NeomorphX1_artefacts/Release/`:
+```bash
+cp -R "build/NeomorphX1_artefacts/Release/VST3/Neomorph X1.vst3" ~/Library/Audio/Plug-Ins/VST3/
+cp -R "build/NeomorphX1_artefacts/Release/AU/Neomorph X1.component" ~/Library/Audio/Plug-Ins/Components/
+cp -R "build/NeomorphX1_artefacts/Release/Standalone/Neomorph X1.app" /Applications/
+```
+
+#### 4. macOS Gatekeeper & Unsigned App Notice
+Pre-built GitHub releases (or bundles copied from another Mac) are **ad-hoc signed** and not notarized with an Apple Developer ID certificate. When launching the Standalone app or scanning the VST3/AU plugins in your DAW for the first time, macOS Gatekeeper may show a warning (*"Neomorph X1 cannot be opened because the developer cannot be verified"* or *"is damaged and can't be opened"*).
+
+To allow macOS to run the unsigned binaries, remove the quarantine attribute in Terminal:
+```bash
+xattr -cr "/Applications/Neomorph X1.app"
+xattr -cr ~/Library/Audio/Plug-Ins/VST3/"Neomorph X1.vst3"
+xattr -cr ~/Library/Audio/Plug-Ins/Components/"Neomorph X1.component"
+```
+Alternatively, open **System Settings → Privacy & Security**, scroll down to the **Security** section, and click **Open Anyway** / **Allow Anyway** next to the blocked Neomorph X1 entry.
+
+*(Note: After installing a new Audio Unit `.component` on macOS, you may need to log out and back in—or run `killall -9 AudioComponentRegistrar`—for Logic Pro / GarageBand to recognize the new AU plugin.)*
+
+---
+
+### Ubuntu / Debian Linux
+
+#### 1. Install Dependencies
+Install the required compiler toolchain and JUCE Linux development libraries (X11, ALSA, FreeType, WebKit/GTK, cURL):
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake git pkg-config \
+    libasound2-dev libjack-jackd2-dev \
+    libfreetype6-dev libfontconfig1-dev \
+    libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
+    libxinerama-dev libxrandr-dev libxrender-dev \
+    libgl1-mesa-dev libglu1-mesa-dev \
+    libgtk-3-dev libwebkit2gtk-4.1-dev libcurl4-openssl-dev
+```
+*(Note: On older Ubuntu releases such as 22.04 LTS, replace `libwebkit2gtk-4.1-dev` with `libwebkit2gtk-4.0-dev`.)*
+
+#### 2. Configure & Build
+```bash
+git clone https://github.com/<your-username>/neomorph-x1.git
+cd neomorph-x1
+
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -j$(nproc)
+```
+
+#### 3. Install VST3 & Standalone Binary
+```bash
+mkdir -p ~/.vst3 ~/.local/bin
+cp -r "build/NeomorphX1_artefacts/Release/VST3/Neomorph X1.vst3" ~/.vst3/
+cp "build/NeomorphX1_artefacts/Release/Standalone/Neomorph X1" ~/.local/bin/
+```
+
+---
+
+### Windows (10 / 11)
+
+#### 1. Install Build Tools
+* Install **Visual Studio 2022** (Community Edition is sufficient) with the **"Desktop development with C++"** workload selected.
+* Install **CMake** (or use the CMake version bundled with Visual Studio) and **Git for Windows**.
+
+#### 2. Configure & Build (PowerShell or x64 Native Tools Command Prompt)
+```powershell
+git clone https://github.com/<your-username>/neomorph-x1.git
+cd neomorph-x1
+
+cmake -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release --parallel
+```
+
+#### 3. Install VST3 & Standalone Executable
+Copy the build outputs from `build\NeomorphX1_artefacts\Release\`:
+* **VST3 Plugin:** Copy `Neomorph X1.vst3` to `C:\Program Files\Common Files\VST3\`
+* **Standalone App:** Copy `Neomorph X1.exe` to any folder of your choice (e.g., `C:\Program Files\Neomorph X1\`)
+
+*(Note: If Windows Defender SmartScreen displays a warning on unsigned standalone builds, click **More info → Run anyway**.)*
+
